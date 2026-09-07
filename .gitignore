@@ -1,0 +1,16 @@
+.tools/
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.test-data/
+*.spec
+*.db
+*.db-shm
+*.db-wal
+browser-profiles/
+exports/
+logs/
