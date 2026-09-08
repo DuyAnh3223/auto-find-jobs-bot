@@ -8,8 +8,8 @@ lọc từ khóa, lưu SQLite và xuất Excel/CSV. Giao diện Python + CustomT
 ## Chạy bản Windows
 
 Mở `dist/FacebookGroupMonitor/FacebookGroupMonitor.exe` sau khi build.
-**Bản sửa đọc feed mới nhất:** `dist/feed-fix-3/FacebookGroupMonitor/FacebookGroupMonitor.exe`
-(tiêu đề cửa sổ có chữ **Feed fix 3**). Đóng app cũ trước khi mở bản này; cấu hình/profile dùng lại.
+**Bản mới nhất:** `dist/fast-review-o/FacebookGroupMonitor/FacebookGroupMonitor.exe`.
+Đóng app cũ trước khi mở bản này; cấu hình/profile dùng lại.
 Khi chuyển sang máy khác, **chép cả thư mục `FacebookGroupMonitor`, gồm `_internal`**.
 Máy cần Windows 10/11 64-bit và Microsoft Edge hoặc Google Chrome đã cài.
 Đây là bản đóng gói theo thư mục, chưa ký số và chưa có installer.
@@ -21,6 +21,8 @@ Máy cần Windows 10/11 64-bit và Microsoft Edge hoặc Google Chrome đã cà
    Bot xác nhận phiên rồi đóng trình duyệt để lưu profile. Không nhập mật khẩu vào ứng dụng.
 5. Bấm **START**: quét ngay một lượt, sau đó tự quét theo khoảng đã cấu hình.
 6. Chọn bài để xem đầy đủ; nhấp đúp hoặc bấm **Mở bài Facebook** để mở bằng trình duyệt mặc định.
+   Bảng bên trái chỉ có ngày phát hiện, group và từ khóa. Nội dung chi tiết nằm ở cột lớn bên phải,
+   chữ lớn hơn và có thanh cuộn riêng. Kéo vạch ngăn giữa bảng và nội dung để thay đổi độ rộng.
 7. Bấm **STOP** để dừng lịch và yêu cầu kết thúc lượt đang chạy. App đợi thao tác trình duyệt
    hiện tại kết thúc trước khi đóng profile; có thể cần khoảng 15–20 giây hoặc lâu hơn khi trình duyệt lỗi.
 
@@ -80,7 +82,12 @@ app.lock                    # Khóa ngăn mở hai app trên cùng dữ liệu
 - Mở feed với yêu cầu sắp xếp thời gian; Facebook có thể không tuân theo thứ tự này.
   “Bài mới” ở V1 là **bài mới phát hiện trong phần feed giới hạn**, không phải cam kết quét đủ mọi bài.
   Lượt đầu có thể lưu bài cũ; bài ghim và bài bị đẩy xuống sâu có thể ảnh hưởng độ bao phủ.
-- Tối đa 10 vòng tải/cuộn/group; thẻ không đủ nội dung/link cũng tiêu thụ giới hạn để tránh quét vô hạn.
+- Tối đa 40 vòng đọc/cuộn/group; dừng ngay khi đủ số bài hợp lệ đã đặt, hoặc sau
+  5 vòng liên tiếp không đọc thêm được bài hợp lệ chưa gặp trong lượt hiện tại.
+  Bài không khớp từ khóa và bài đã lưu ở lượt trước vẫn tính là tiến triển.
+  Có thêm bài thì bộ đếm 5 vòng trở về 0; thẻ thiếu nội dung/link không tính vào số bài mục tiêu.
+  Nhật ký báo số bài thực tế/mục tiêu và lý do dừng; dừng theo giới hạn hoặc không có tiến triển
+  chỉ là thông tin, không tự tạo cảnh báo nếu không có lỗi/thẻ đọc thiếu.
   Không dừng chỉ vì thấy bài đã lưu bởi feed có thể không theo thời gian.
 - Mở “Xem thêm”/“See more” trong phần nội dung bài. Chưa hỗ trợ OCR ảnh, video, bình luận,
   lấy tác giả, thông báo đẩy hoặc website tuyển dụng.
@@ -168,3 +175,69 @@ Tài liệu kỹ thuật tham khảo:
 [Playwright browser channels](https://playwright.dev/python/docs/browsers),
 [persistent context](https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-persistent-context),
 [CustomTkinter packaging](https://github.com/TomSchimansky/CustomTkinter/wiki/Packaging).
+
+## Duyệt bài và theo dõi ứng tuyển
+
+- **Kiểm tra group (N)** mở danh sách cảnh báo ngay trong cửa sổ chính: lỗi/gián đoạn,
+  thẻ thiếu nội dung/link, thẻ đổi/timeout.
+  Hiển thị thời gian, số bài đọc thực tế, URL và nút **Mở group**, **Đã kiểm tra**.
+  Group chưa tới lượt khi dừng hoặc mở trình duyệt thất bại được ghi **Chưa hoàn tất**.
+  Cảnh báo lưu trong SQLite qua lần khởi động; mỗi group giữ thông tin gần nhất,
+  lượt quét mới không tự xóa group khỏi danh sách. **Đã kiểm tra** xác nhận cảnh báo hiện tại;
+  phát sinh cảnh báo ở lượt sau sẽ hiện lại. Đây không phải bảo đảm không bỏ sót bài.
+  Chỉ đạt giới hạn bài/lượt cuộn là thông tin trong nhật ký, không tạo cảnh báo.
+  Bản mới tự bỏ các cảnh báo cũ chỉ có lý do đạt giới hạn; giữ cảnh báo có lỗi đọc.
+  Lượt đọc bình thường không xóa lỗi cũ chưa được bạn đánh dấu **Đã kiểm tra**.
+- Danh sách cấu hình group chỉ hiện ô chọn, tên và nút **Xóa**. Rê chuột lên tên để xem URL;
+  nhấp đúp tên để mở group bằng trình duyệt mặc định, dùng được cả khi đang quét.
+- Với khoảng 50 group có 10–60 bài/ngày theo thống kê của bạn, cấu hình khởi điểm là
+  **15 bài/group, mỗi 30 phút** khi chạy liên tục. Đây là mức thử nghiệm, không bảo đảm không bỏ sót.
+  Nếu lượt quét gần hoặc vượt 30 phút, tăng khoảng lên 40–45 phút; nếu ổn định dưới 15 phút,
+  có thể thử mỗi 20 phút. Bài đăng có thể dồn đợt; sau thời gian ngừng chạy cần quét sâu hơn.
+  Giới hạn bài là tối đa, reader có thể kết thúc sớm do giới hạn cuộn hoặc thẻ không đọc được.
+  Khoảng quét tính từ đầu lượt; nếu quá hạn, bot nghỉ thêm trọn khoảng cấu hình sau khi quét xong.
+- Danh sách bài có bộ lọc **Đánh giá** (Phù hợp/Cần xem lại) và **Xử lý**
+  (Chưa xử lý/Đã lưu/Đã bỏ qua/Tất cả). Nhãn đánh giá là kết quả lọc tự động;
+  việc lưu hoặc bỏ qua là quyết định của bạn.
+- Khi duyệt bài: `Q`/`E` sang bài trước/sau, `Y` lưu **Đang xem xét** và chọn bài tiếp,
+  `D` bỏ qua và chọn bài tiếp, `O` mở bài Facebook đang chọn, `Ctrl+Z` hoàn tác thao tác lưu hoặc bỏ qua gần nhất.
+  Phím không hoạt động khi con trỏ đang ở ô nhập liệu.
+- **Đang xem xét** dành cho tin đáng chú ý nhưng chưa ứng tuyển; chưa bắt buộc công ty,
+  vị trí hay ngày ứng tuyển. Khi đổi sang trạng thái ứng tuyển hoặc phỏng vấn, công ty và vị trí là bắt buộc.
+- Màn hình Theo dõi ứng tuyển nằm trong cửa sổ chính. `Q`/`E` chuyển hồ sơ,
+  `D` xóa hồ sơ hiện tại sau khi xác nhận, `Ctrl+S` lưu, `Ctrl+Z` hoàn tác lưu/xóa gần nhất.
+  Bấm ô **Xóa** ở cuối từng dòng để xóa chính hồ sơ đó.
+- Cột **Theo dõi** trong danh sách bài cập nhật trạng thái hồ sơ và tô xanh bài đã lưu.
+  Nội dung trùng ở group khác vẫn liên kết cùng hồ sơ.
+## Quy tắc lọc và gom bài
+
+Bản đóng gói hiện tại: `dist/fast-review-o/FacebookGroupMonitor/FacebookGroupMonitor.exe`.
+
+- Ba nhóm điều kiện độc lập: vị trí/công nghệ, địa điểm và kinh nghiệm. Từ khóa trong cùng nhóm là OR; các nhóm đã nhập phải cùng đạt (AND). Nhóm để trống được xem là không giới hạn.
+- Cột **Đánh giá** ghi Phù hợp hoặc Cần xem lại. Bộ lọc giúp ưu tiên đọc, còn Lưu xem xét/Bỏ qua là quyết định xử lý của bạn.
+- Bài có cùng nội dung sau khi chuẩn hóa Unicode, viết thường và gom khoảng trắng dùng chung một SHA-256. Một dòng kết quả hiện tất cả group và link nguồn.
+- Quét lại cùng URL cập nhật nội dung và lần thấy gần nhất, nhưng giữ ngày phát hiện đầu tiên. Nếu nội dung đã sửa, quyết định thủ công được xóa và bài được đánh giá lại.
+- Quyết định bỏ qua được lưu theo hash. Excel tự động chỉ xuất các bài có đánh giá **Phù hợp** và **Cần xem lại**.
+
+## Theo dõi ứng tuyển
+
+Bản có chức năng này: `dist/fast-review-o/FacebookGroupMonitor/FacebookGroupMonitor.exe`.
+Đóng app cũ trước khi mở bản mới. Cấu hình, phiên đăng nhập và dữ liệu bài đăng được giữ lại.
+
+- Bấm **Theo dõi ứng tuyển** → **+ Hồ sơ mới** để nhập job thủ công.
+- Hoặc dùng `Y` khi duyệt bài để tạo hồ sơ **Đang xem xét**, điền sẵn link và nội dung bài.
+  Một tin nhiều vị trí có thể tạo nhiều hồ sơ.
+- Lưu công ty, vị trí, ngày ứng tuyển, trạng thái, lịch phỏng vấn, địa điểm/link họp,
+  tên HR, email, điện thoại/Zalo và ghi chú. Công ty và vị trí bắt buộc từ trạng thái **Đã ứng tuyển** trở đi.
+- Ngày ứng tuyển: `DD/MM/YYYY`; lịch phỏng vấn: `DD/MM/YYYY HH:MM`, theo giờ máy tính.
+  Lưu lịch hẹn hiện tại; các vòng trước có thể ghi trong phần ghi chú. Chưa có thông báo nhắc lịch.
+- Trạng thái: Đang xem xét, Đã ứng tuyển, Đã hẹn phỏng vấn, Đã phỏng vấn, Nhận offer, Bị từ chối, Đã rút.
+  Tìm kiếm hoặc lọc trạng thái, chọn hồ sơ để sửa, bấm **Lưu hồ sơ** để ghi thay đổi.
+- Hồ sơ nằm trong bảng `applications` của `monitor.db`, không bị cập nhật bởi lượt quét Facebook.
+  Xóa toàn bộ `monitor.db` sẽ xóa cả hồ sơ ứng tuyển; hãy sao lưu trước khi reset dữ liệu.
+- Excel kết quả quét vẫn chỉ chứa bài đăng; hồ sơ ứng tuyển được lưu và xem trong app.
+- Theo dõi ứng tuyển hiển thị ngay trong cửa sổ chính. Bấm **← Danh sách bài** để quay lại;
+  chuyển qua lại giữ nguyên các ô đang nhập, bấm **Lưu hồ sơ** để lưu bền vững.
+- Cột **Theo dõi** hiển thị trạng thái hồ sơ; các dòng có hồ sơ được tô xanh.
+  Bản trùng nội dung ở group khác cũng nhận trạng thái. Hồ sơ cũ được liên kết qua link nguồn.
+  Hồ sơ nhập thủ công cần có link bài để hiện trạng thái tương ứng trong danh sách.

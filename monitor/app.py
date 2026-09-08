@@ -7,13 +7,14 @@ from datetime import datetime
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from threading import Thread
-from tkinter import filedialog, messagebox, ttk
+from tkinter import PanedWindow, filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
 from monitor.core import Group, Settings, group_url, post_url
 from monitor.exporter import export_posts, local_time
 from monitor.storage import Store
+from monitor.tooltip import LinkTooltip
 from monitor.worker import MonitorWorker
 
 
@@ -22,9 +23,11 @@ class MonitorApp(ctk.CTk):
 
     def __init__(self, data_dir: Path):
         super().__init__()
-        self.title("Facebook Group Monitor · Feed fix 3")
-        self.geometry("1220x850")
-        self.minsize(1060, 740)
+        self.title("Facebook Group Monitor · Theo dõi ứng tuyển")
+        self.geometry(
+            f"{min(1440, self.winfo_screenwidth() - 60)}x{min(850, self.winfo_screenheight() - 80)}"
+        )
+        self.minsize(1060, 680)
         self.data_dir = data_dir
         self.store = Store(data_dir / "monitor.db")
         self.settings = self.store.load_settings()
@@ -35,6 +38,9 @@ class MonitorApp(ctk.CTk):
         self.next_scan = None
         self.offset = 0
         self.rows = {}
+        self.tracker = None
+        self.checks_panel = None
+        self.post_undo = []
         self.edit_controls = []
         self.group_vars = []
         self.protocol("WM_DELETE_WINDOW", self.close_app)
@@ -43,6 +49,17 @@ class MonitorApp(ctk.CTk):
         self.build_sidebar()
         self.build_results()
         self.refresh_results()
+        self.bind_all("<KeyPress-q>", lambda event: self.handle_post_shortcut(event, -1))
+        self.bind_all("<KeyPress-e>", lambda event: self.handle_post_shortcut(event, 1))
+        self.bind_all(
+            "<KeyPress-y>", lambda event: self.handle_post_action_shortcut(event, self.save_for_consideration)
+        )
+        self.bind_all(
+            "<KeyPress-d>", lambda event: self.handle_post_action_shortcut(event, self.mark_skipped)
+        )
+        self.bind_all("<KeyPress-o>", self.handle_open_post_shortcut)
+        self.bind_all("<Control-s>", self.handle_ctrl_s)
+        self.bind_all("<Control-z>", self.handle_ctrl_z)
         self.after(200, self.poll_events)
 
     def build_sidebar(self):
@@ -68,15 +85,19 @@ class MonitorApp(ctk.CTk):
         add = ctk.CTkButton(panel, text="+ Thêm group", command=self.add_group)
         add.grid(row=4, column=0, padx=16, pady=(0, 15), sticky="ew")
         self.edit_controls.append(add)
-        ctk.CTkLabel(panel, text="TỪ KHÓA · mỗi dòng một cụm từ", font=("Segoe UI", 14, "bold")).grid(
+        ctk.CTkLabel(panel, text="VỊ TRÍ / CÔNG NGHỆ · OR", font=("Segoe UI", 14, "bold")).grid(
             row=5, column=0, sticky="w", padx=16
         )
         self.keywords = ctk.CTkTextbox(panel, height=135, font=("Segoe UI", 14))
         self.keywords.grid(row=6, column=0, padx=16, pady=8, sticky="ew")
         self.keywords.insert("1.0", "\n".join(self.settings.keywords))
         self.edit_controls.append(self.keywords)
+        self.location_box = self._criteria_box(panel, "ĐỊA ĐIỂM · OR", self.settings.location_keywords, 7)
+        self.experience_box = self._criteria_box(
+            panel, "KINH NGHIỆM · OR", self.settings.experience_keywords, 9
+        )
         options = ctk.CTkFrame(panel, fg_color="transparent")
-        options.grid(row=7, column=0, padx=16, pady=8, sticky="ew")
+        options.grid(row=11, column=0, padx=16, pady=8, sticky="ew")
         self.interval = ctk.StringVar(value=str(self.settings.interval_minutes))
         self.max_posts = ctk.StringVar(value=str(self.settings.max_posts))
         for index, (label, var) in enumerate(
@@ -93,12 +114,12 @@ class MonitorApp(ctk.CTk):
         self.edit_controls.append(menu)
         self.auto_export = ctk.BooleanVar(value=self.settings.auto_export)
         auto = ctk.CTkCheckBox(panel, text="Tự cập nhật Excel sau mỗi lượt", variable=self.auto_export)
-        auto.grid(row=8, column=0, padx=16, pady=8, sticky="w")
+        auto.grid(row=12, column=0, padx=16, pady=8, sticky="w")
         self.edit_controls.append(auto)
         save = ctk.CTkButton(
             panel, text="Lưu cấu hình", command=self.save_settings, fg_color="#475569", hover_color="#334155"
         )
-        save.grid(row=9, column=0, padx=16, pady=8, sticky="ew")
+        save.grid(row=13, column=0, padx=16, pady=8, sticky="ew")
         self.edit_controls.append(save)
         controls = ctk.CTkFrame(sidebar, fg_color="transparent")
         controls.grid(row=1, column=0, sticky="ew", pady=(8, 0))
@@ -150,18 +171,37 @@ class MonitorApp(ctk.CTk):
             line = ctk.CTkFrame(self.group_frame, fg_color="transparent")
             line.pack(fill="x", pady=3)
             var = ctk.BooleanVar(value=group.enabled)
-            check = ctk.CTkCheckBox(line, text=group.name[:27], variable=var, width=190)
-            check.pack(side="left", fill="x", expand=True)
+            check = ctk.CTkCheckBox(line, text="", variable=var, width=24)
+            check.grid(row=0, column=0, sticky="nw", pady=4)
+            line.grid_columnconfigure(1, weight=1)
+            name = ctk.CTkLabel(line, text=group.name, wraplength=175, justify="left",
+                               anchor="w", cursor="hand2")
+            name.grid(row=0, column=1, sticky="ew", padx=(4, 6))
+            name.bind("<Double-Button-1>", lambda event, url=group.url: self.open_group(url))
+            name.link_tooltip = LinkTooltip(name, group.url)
             remove = ctk.CTkButton(
                 line, text="Xóa", width=45, command=lambda url=group.url: self.remove_group(url)
             )
-            remove.pack(side="right")
+            remove.grid(row=0, column=2, sticky="ne", pady=4)
             self.group_vars.append(var)
             self.group_controls.extend([check, remove])
         if not self.settings.groups:
             ctk.CTkLabel(self.group_frame, text="Chưa có group. Thêm link để bắt đầu.", wraplength=250).pack(
                 pady=35
             )
+
+    def open_group(self, url):
+        webbrowser.open(group_url(url))
+
+    def _criteria_box(self, panel, title, values, row):
+        ctk.CTkLabel(panel, text=title, font=("Segoe UI", 13, "bold")).grid(
+            row=row, column=0, sticky="w", padx=16, pady=(4, 0)
+        )
+        box = ctk.CTkTextbox(panel, height=76, font=("Segoe UI", 13))
+        box.grid(row=row + 1, column=0, padx=16, pady=5, sticky="ew")
+        box.insert("1.0", "\n".join(values))
+        self.edit_controls.append(box)
+        return box
 
     def sync_group_flags(self):
         for group, var in zip(self.settings.groups, self.group_vars):
@@ -199,6 +239,8 @@ class MonitorApp(ctk.CTk):
         settings = Settings(
             groups=[Group(g.name, g.url, g.enabled) for g in self.settings.groups],
             keywords=self.keywords.get("1.0", "end").splitlines(),
+            location_keywords=self.location_box.get("1.0", "end").splitlines(),
+            experience_keywords=self.experience_box.get("1.0", "end").splitlines(),
             interval_minutes=interval,
             max_posts=limit,
             browser="msedge" if self.browser.get() == "Edge" else "chrome",
@@ -249,18 +291,40 @@ class MonitorApp(ctk.CTk):
 
     def build_results(self):
         panel = ctk.CTkFrame(self, fg_color="transparent")
+        self.results_panel = panel
         panel.grid(row=0, column=1, padx=22, pady=18, sticky="nsew")
         panel.grid_columnconfigure(0, weight=1)
-        panel.grid_rowconfigure(3, weight=1)
-        ctk.CTkLabel(panel, text="Bài đăng tìm được", font=("Segoe UI", 26, "bold")).grid(
-            row=0, column=0, sticky="w"
-        )
+        panel.grid_rowconfigure(4, weight=1)
+        ctk.CTkLabel(panel, text="Bài đăng", font=("Segoe UI", 26, "bold")).grid(row=0, column=0, sticky="w")
         self.status = ctk.CTkLabel(
             panel, text="Sẵn sàng · đăng nhập Facebook trước lần quét đầu tiên", anchor="w"
         )
         self.status.grid(row=1, column=0, sticky="ew", pady=(3, 12))
+        self.checks_button = ctk.CTkButton(
+            panel, text=f"Kiểm tra group ({len(self.store.scan_checks())})", command=self.open_checks
+        )
+        self.checks_button.grid(row=0, column=0, sticky="e")
+        tabs = ctk.CTkFrame(panel, fg_color="transparent")
+        tabs.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        ctk.CTkButton(tabs, text="Theo dõi ứng tuyển", command=self.open_tracker).pack(side="left")
+        ctk.CTkLabel(tabs, text="Đánh giá").pack(side="left", padx=(20, 5))
+        self.evaluation_filter = ctk.CTkOptionMenu(
+            tabs,
+            values=["Tất cả", "Phù hợp", "Cần xem lại"],
+            width=135,
+            command=lambda _: self.search_results(),
+        )
+        self.evaluation_filter.pack(side="left")
+        ctk.CTkLabel(tabs, text="Xử lý").pack(side="left", padx=(14, 5))
+        self.processing_filter = ctk.CTkOptionMenu(
+            tabs,
+            values=["Chưa xử lý", "Đã lưu", "Đã bỏ qua", "Tất cả"],
+            width=135,
+            command=lambda _: self.search_results(),
+        )
+        self.processing_filter.pack(side="left")
         toolbar = ctk.CTkFrame(panel, fg_color="transparent")
-        toolbar.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        toolbar.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         self.search = ctk.CTkEntry(toolbar, placeholder_text="Tìm trong nội dung, group, từ khóa…")
         self.search.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.search.bind("<Return>", lambda _: self.search_results())
@@ -270,8 +334,20 @@ class MonitorApp(ctk.CTk):
             button = ctk.CTkButton(toolbar, text=label, width=65, command=lambda ext=suffix: self.export(ext))
             button.pack(side="left", padx=3)
             self.export_buttons.append(button)
-        table_frame = ctk.CTkFrame(panel)
-        table_frame.grid(row=3, column=0, sticky="nsew")
+        self.reading_panes = PanedWindow(
+            panel, orient="horizontal", sashwidth=8, background="#dbe2ea", borderwidth=0, opaqueresize=True
+        )
+        self.reading_panes.grid(row=4, column=0, sticky="nsew", pady=(0, 10))
+        list_panel = ctk.CTkFrame(self.reading_panes, corner_radius=0)
+        list_panel.grid_columnconfigure(0, weight=1)
+        list_panel.grid_rowconfigure(0, weight=1)
+        detail_panel = ctk.CTkFrame(self.reading_panes, corner_radius=0)
+        detail_panel.grid_columnconfigure(0, weight=1)
+        detail_panel.grid_rowconfigure(1, weight=1)
+        self.reading_panes.add(list_panel, minsize=280, width=390, stretch="always")
+        self.reading_panes.add(detail_panel, minsize=300, width=520, stretch="always")
+        table_frame = ctk.CTkFrame(list_panel)
+        table_frame.grid(row=0, column=0, sticky="nsew")
         table_frame.grid_columnconfigure(0, weight=1)
         table_frame.grid_rowconfigure(0, weight=1)
         style = ttk.Style(self)
@@ -287,13 +363,16 @@ class MonitorApp(ctk.CTk):
         style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"), padding=7)
         style.map("Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", "#0f172a")])
         self.table = ttk.Treeview(
-            table_frame, columns=("time", "group", "keywords", "content"), show="headings"
+            table_frame, columns=("application", "evaluation", "time", "group", "keywords"), show="headings"
         )
+        self.table.tag_configure("applied", background="#dcfce7", foreground="#166534")
+        self.table.tag_configure("review", background="#fef3c7", foreground="#92400e")
         for key, title, width in [
-            ("time", "Ngày phát hiện", 155),
-            ("group", "Group", 155),
-            ("keywords", "Từ khóa", 170),
-            ("content", "Nội dung", 270),
+            ("application", "Theo dõi", 155),
+            ("evaluation", "Đánh giá", 125),
+            ("time", "Ngày phát hiện", 145),
+            ("group", "Group", 90),
+            ("keywords", "Từ khóa", 155),
         ]:
             self.table.heading(key, text=title)
             self.table.column(key, width=width, minwidth=70)
@@ -305,22 +384,38 @@ class MonitorApp(ctk.CTk):
         self.table.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
         self.table.bind("<<TreeviewSelect>>", self.show_details)
         self.table.bind("<Double-1>", self.open_post)
-        nav = ctk.CTkFrame(panel, fg_color="transparent")
-        nav.grid(row=4, column=0, sticky="ew", pady=8)
+        nav = ctk.CTkFrame(list_panel, fg_color="transparent")
+        nav.grid(row=1, column=0, sticky="ew", padx=6, pady=8)
         self.total_label = ctk.CTkLabel(nav, text="")
         self.total_label.pack(side="left")
         self.next_button = ctk.CTkButton(nav, text="Sau →", width=75, command=lambda: self.change_page(1))
         self.next_button.pack(side="right", padx=3)
         self.prev_button = ctk.CTkButton(nav, text="← Trước", width=75, command=lambda: self.change_page(-1))
         self.prev_button.pack(side="right", padx=3)
-        ctk.CTkButton(nav, text="Mở bài Facebook", width=130, command=self.open_post).pack(
-            side="right", padx=8
+        detail_header = ctk.CTkFrame(detail_panel, fg_color="transparent")
+        detail_header.grid(row=0, column=0, sticky="ew", padx=12, pady=10)
+        ctk.CTkLabel(detail_header, text="Nội dung bài đăng", font=("Segoe UI", 17, "bold")).pack(side="left")
+        ctk.CTkButton(detail_header, text="Mở Facebook (O)", width=125, command=self.open_post).pack(side="right")
+        self.consider_button = ctk.CTkButton(
+            detail_header, text="Lưu xem xét (Y)", width=140, command=self.save_for_consideration
         )
-        self.details = ctk.CTkTextbox(panel, height=155, font=("Segoe UI", 13), wrap="word")
-        self.details.grid(row=5, column=0, sticky="ew", pady=(0, 10))
+        self.consider_button.pack(side="right", padx=6)
+        self.skip_button = ctk.CTkButton(
+            detail_header,
+            text="Bỏ qua (D)",
+            width=80,
+            command=self.mark_skipped,
+            fg_color="#64748b",
+            hover_color="#475569",
+        )
+        self.skip_button.pack(side="right", padx=6)
+        self.details = ctk.CTkTextbox(
+            detail_panel, font=("Segoe UI", 16), wrap="word", spacing1=3, spacing3=6
+        )
+        self.details.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.set_text(self.details, "Chọn một bài để xem nội dung. Nhấp đúp để mở bài trên Facebook.")
         self.log = ctk.CTkTextbox(panel, height=105, font=("Consolas", 11), wrap="word")
-        self.log.grid(row=6, column=0, sticky="ew")
+        self.log.grid(row=5, column=0, sticky="ew")
         self.log.configure(state="disabled")
         ctk.CTkButton(
             panel,
@@ -328,7 +423,7 @@ class MonitorApp(ctk.CTk):
             command=lambda: os.startfile(str(self.data_dir)),
             fg_color="#475569",
             hover_color="#334155",
-        ).grid(row=7, column=0, sticky="w", pady=(10, 0))
+        ).grid(row=6, column=0, sticky="w", pady=(10, 0))
 
     @staticmethod
     def set_text(widget, text):
@@ -353,12 +448,28 @@ class MonitorApp(ctk.CTk):
         self.offset = max(0, self.offset + direction * self.PAGE_SIZE)
         self.refresh_results()
 
+    def filtered_rows(self):
+        evaluation = {"Phù hợp": "suitable", "Cần xem lại": "review"}.get(self.evaluation_filter.get())
+        processing = {
+            "Chưa xử lý": "unprocessed",
+            "Đã lưu": "tracked",
+            "Đã bỏ qua": "skipped",
+        }.get(self.processing_filter.get())
+        rows = self.store.grouped_posts(self.search.get().strip(), category="all")
+        return [
+            row
+            for row in rows
+            if row["evaluation"] in {"suitable", "review"}
+            and (evaluation is None or row["evaluation"] == evaluation)
+            and (processing is None or row["processing"] == processing)
+        ]
+
     def refresh_results(self):
-        search = self.search.get().strip()
-        total = self.store.count(search)
+        visible = self.filtered_rows()
+        total = len(visible)
         if self.offset >= total:
             self.offset = max(0, ((total - 1) // self.PAGE_SIZE) * self.PAGE_SIZE)
-        rows = self.store.posts(search, self.PAGE_SIZE, self.offset)
+        rows = visible[self.offset : self.offset + self.PAGE_SIZE]
         selected = self.table.selection()
         self.rows = {str(row["id"]): row for row in rows}
         for item in self.table.get_children():
@@ -368,11 +479,17 @@ class MonitorApp(ctk.CTk):
                 "",
                 "end",
                 iid=key,
+                tags=("applied",)
+                if row.get("application_ids")
+                else ("review",)
+                if row["evaluation"] == "review"
+                else (),
                 values=(
+                    row.get("application_status") or "Chưa lưu",
+                    "Phù hợp" if row["evaluation"] == "suitable" else "Cần xem lại",
                     local_time(row["detected_at"])[:19],
                     row["group_name"],
                     ", ".join(json.loads(row["keywords"])),
-                    " ".join(row["content"].split())[:180],
                 ),
             )
         if selected and selected[0] in self.rows:
@@ -395,7 +512,11 @@ class MonitorApp(ctk.CTk):
             self.set_text(
                 self.details,
                 f"{row['group_name']} · {', '.join(json.loads(row['keywords']))}\n"
-                f"{row['url']}\nNgày đăng: {local_time(row['posted_at']) or row['posted_time_raw'] or 'Không xác định'}"
+                f"Đánh giá: {'Phù hợp' if row['evaluation'] == 'suitable' else 'Cần xem lại'} · "
+                f"Theo dõi: {row.get('application_status') or 'Chưa lưu'} · "
+                f"{len(row.get('source_urls', [row['url']]))} bài trùng nội dung\n"
+                f"{row['url']}\nNguồn: {' | '.join(row.get('source_urls', [row['url']]))}\n"
+                f"Ngày đăng: {local_time(row['posted_at']) or row['posted_time_raw'] or 'Không xác định'}"
                 f"\nPhát hiện: {local_time(row['detected_at'])}\n\n{row['content']}",
             )
 
@@ -409,6 +530,148 @@ class MonitorApp(ctk.CTk):
         if row and post_url(row["url"], row["group_url"]):
             webbrowser.open(row["url"])
 
+    def select_row(self, iid):
+        if iid in self.rows:
+            self.table.selection_set(iid)
+            self.table.focus(iid)
+            self.table.see(iid)
+            self.show_details()
+
+    def move_post(self, direction):
+        children = self.table.get_children()
+        if not children:
+            return
+        selected = self.table.selection()
+        index = children.index(selected[0]) if selected else (-1 if direction > 0 else 0)
+        target = index + direction
+        if 0 <= target < len(children):
+            self.select_row(children[target])
+            return
+        total = len(self.filtered_rows())
+        if direction > 0 and self.offset + self.PAGE_SIZE < total:
+            self.offset += self.PAGE_SIZE
+            self.refresh_results()
+            self.select_row(self.table.get_children()[0])
+        elif direction < 0 and self.offset:
+            self.offset = max(0, self.offset - self.PAGE_SIZE)
+            self.refresh_results()
+            self.select_row(self.table.get_children()[-1])
+
+    def move_after_post_action(self, previous_id, index):
+        self.refresh_results()
+        children = self.table.get_children()
+        if not children:
+            return
+        if previous_id in children:
+            index = min(index + 1, len(children) - 1)
+        else:
+            index = min(index, len(children) - 1)
+        self.select_row(children[index])
+
+    def save_for_consideration(self):
+        row = self.selected_row()
+        if not row or row.get("application_ids"):
+            return
+        children = self.table.get_children()
+        index = children.index(str(row["id"]))
+        value = {
+            "status": "Đang xem xét",
+            "source_url": row["url"],
+            "notes": row["content"],
+        }
+        try:
+            application_id = self.store.save_application(value)
+        except ValueError as exc:
+            messagebox.showerror("Không lưu được", str(exc), parent=self)
+            return
+        self.post_undo.append(("consider", application_id, str(row["id"])))
+        self.move_after_post_action(str(row["id"]), index)
+
+    def mark_skipped(self):
+        row = self.selected_row()
+        if not row:
+            return
+        children = self.table.get_children()
+        index = children.index(str(row["id"]))
+        self.store.set_user_decision(row["content_hash"], "skipped")
+        self.post_undo.append(("skip", row["content_hash"], str(row["id"])))
+        self.move_after_post_action(str(row["id"]), index)
+
+    def open_tracker(self):
+        from monitor.tracking_ui import TrackingPanel
+
+        if self.tracker is None or not self.tracker.winfo_exists():
+            self.tracker = TrackingPanel(self, self.store, self.refresh_results, self.show_posts)
+        else:
+            self.tracker.refresh()
+        self.results_panel.grid_remove()
+        self.tracker.grid(row=0, column=1, padx=12, pady=12, sticky="nsew")
+        self.tracker.focus_set()
+
+    def show_posts(self):
+        # Keep the form alive so switching views preserves unsaved edits.
+        self.tracker.grid_remove()
+        self.results_panel.grid()
+        self.refresh_results()
+
+    def editing_text(self):
+        if self.checks_panel is not None and self.checks_panel.winfo_ismapped():
+            return True
+        widget = self.focus_get()
+        return widget is not None and widget.winfo_class() in {"Entry", "Text", "TEntry", "TCombobox"}
+
+    def handle_post_shortcut(self, event, direction):
+        if not self.editing_text():
+            if self.tracker is not None and self.tracker.winfo_ismapped():
+                self.tracker.move_application(direction)
+            else:
+                self.move_post(direction)
+            return "break"
+        return None
+
+    def handle_post_action_shortcut(self, event, action):
+        if not self.editing_text():
+            if self.tracker is not None and self.tracker.winfo_ismapped():
+                if event.keysym.lower() == "d":
+                    self.tracker.delete_current()
+                    return "break"
+            else:
+                action()
+                return "break"
+        return None
+
+    def handle_open_post_shortcut(self, event):
+        if (self.tracker is None or not self.tracker.winfo_ismapped()) and not self.editing_text():
+            self.open_post()
+            return "break"
+        return None
+
+    def handle_ctrl_s(self, event):
+        if self.tracker is not None and self.tracker.winfo_ismapped():
+            self.tracker.save()
+            return "break"
+        return None
+
+    def handle_ctrl_z(self, event):
+        if self.editing_text():
+            return None
+        if self.tracker is not None and self.tracker.winfo_ismapped():
+            self.tracker.undo()
+        else:
+            self.undo_post_action()
+        return "break"
+
+    def undo_post_action(self):
+        if not self.post_undo:
+            return
+        kind, value, row_id = self.post_undo.pop()
+        if kind == "consider":
+            self.store.delete_application(value)
+        else:
+            self.store.set_user_decision(value, None)
+        self.refresh_results()
+        self.select_row(row_id)
+
     def export(self, suffix):
         if self.export_thread and self.export_thread.is_alive():
             return
@@ -420,7 +683,6 @@ class MonitorApp(ctk.CTk):
         )
         if not filename:
             return
-        search = self.search.get().strip()
         if (
             Path(filename).resolve() == (self.data_dir / "exports" / "results.xlsx").resolve()
             and self.worker.running
@@ -434,7 +696,7 @@ class MonitorApp(ctk.CTk):
 
         def run():
             try:
-                rows = self.store.posts(search)
+                rows = self.filtered_rows()
                 export_posts(rows, Path(filename))
                 self.export_events.put(("log", f"Đã xuất {len(rows)} bài: {filename}"))
             except Exception as exc:
@@ -442,6 +704,15 @@ class MonitorApp(ctk.CTk):
 
         self.export_thread = Thread(target=run, name="export")
         self.export_thread.start()
+
+    def open_checks(self):
+        from monitor.checks_ui import ChecksPanel
+
+        if self.checks_panel is None:
+            self.checks_panel = ChecksPanel(self)
+        self.results_panel.grid_remove()
+        self.checks_panel.grid(row=0, column=1, padx=12, pady=12, sticky="nsew")
+        self.checks_panel.refresh()
 
     def poll_events(self):
         refresh = False
@@ -453,6 +724,10 @@ class MonitorApp(ctk.CTk):
                     break
                 if kind == "results":
                     refresh = True
+                elif kind == "checks":
+                    self.checks_button.configure(text=f"Kiểm tra group ({len(self.store.scan_checks())})")
+                    if self.checks_panel is not None and self.checks_panel.winfo_ismapped():
+                        self.checks_panel.refresh()
                 elif kind == "finished":
                     self.next_scan = None
                     self.status.configure(text="Đã dừng · xem nhật ký bên dưới nếu có lỗi")
@@ -492,6 +767,9 @@ class MonitorApp(ctk.CTk):
     def close_app(self):
         if self.closing:
             return
+        if self.tracker is not None and self.tracker.winfo_exists():
+            if not self.tracker.can_leave():
+                return
         # Persist pending edits on normal exit; invalid input stays visible for correction.
         if not self.worker.running and self.save_settings() is None:
             return
