@@ -148,8 +148,8 @@ class Settings:
     )
     location_keywords: list[str] = field(default_factory=list)
     experience_keywords: list[str] = field(default_factory=list)
-    interval_minutes: int = 20
-    max_posts: int = 30
+    interval_minutes: int = 45
+    max_posts: int = 20
     daily_deep_time: str = "07:00"
     daily_deep_posts: int = 60
     browser: str = "msedge"
