@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from monitor.core import Group, Post, Settings, group_url, match_keywords, post_url
+from monitor.core import Group, Post, Settings, classify_content, group_url, match_keywords, post_url
 from monitor.storage import Store
 
 
@@ -103,3 +103,51 @@ def test_store_config_and_literal_search_pagination(tmp_path):
     assert store.count("Java") == 3
     assert store.count("%") == 0
     assert store.count("' OR 1=1 --") == 0
+
+
+def test_grouped_posts_merge_exact_content_and_apply_one_decision(tmp_path):
+    store = Store(tmp_path / "monitor.db")
+    first = replace(sample_post(), content="Java Intern\nSpring Boot", detected_at="2026-09-07T07:35:00+00:00")
+    second = replace(
+        sample_post(),
+        url="https://www.facebook.com/groups/456/posts/999",
+        group_name="Java Jobs",
+        group_url="https://www.facebook.com/groups/456",
+        content=" java intern  spring boot ",
+        detected_at="2026-09-07T08:35:00+00:00",
+    )
+    assert store.save_post(first)
+    assert store.save_post(second)
+    rows = store.grouped_posts(category="suitable")
+    assert len(rows) == 1
+    assert rows[0]["source_urls"] == [second.url, first.url]
+    assert set(rows[0]["source_groups"]) == {"IT Jobs HCM", "Java Jobs"}
+
+    store.set_user_decision(rows[0]["content_hash"], "skipped")
+    assert store.grouped_posts(category="suitable") == []
+    assert len(store.grouped_posts(category="skipped")) == 1
+
+
+def test_content_change_resets_manual_decision(tmp_path):
+    store = Store(tmp_path / "monitor.db")
+    post = sample_post()
+    store.save_post(post)
+    digest = store.grouped_posts()[0]["content_hash"]
+    store.set_user_decision(digest, "skipped")
+    store.save_post(replace(post, content="A different job", bot_status="review"))
+    row = store.posts()[0]
+    assert row["content_hash"] != digest
+    assert row["user_decision"] is None
+    assert store.grouped_posts(category="review")[0]["content"] == "A different job"
+
+
+def test_classification_requires_all_configured_criteria():
+    settings = Settings(
+        keywords=["java intern"],
+        location_keywords=["hcm", "ho chi minh"],
+        experience_keywords=["intern", "fresher"],
+    )
+    assert classify_content("Java Intern HCM fresher", settings) == "suitable"
+    assert classify_content("Java Intern Hà Nội fresher", settings) == "unsuitable"
+    assert classify_content("Java Intern HCM senior 3 years", settings) == "unsuitable"
+    assert classify_content("Java Intern HCM", settings) == "suitable"
