@@ -151,3 +151,15 @@ def test_classification_requires_all_configured_criteria():
     assert classify_content("Java Intern Hà Nội fresher", settings) == "unsuitable"
     assert classify_content("Java Intern HCM senior 3 years", settings) == "unsuitable"
     assert classify_content("Java Intern HCM", settings) == "suitable"
+
+
+def test_daily_scan_settings_validate_and_persist(tmp_path):
+    store = Store(tmp_path / "monitor.db")
+    settings = Settings(daily_deep_time="07:00", daily_deep_posts=60)
+    settings.validate()
+    store.save_settings(settings)
+    loaded = store.load_settings()
+    assert loaded.daily_deep_time == "07:00"
+    assert loaded.daily_deep_posts == 60
+    with pytest.raises(ValueError):
+        Settings(daily_deep_time="25:00").validate()

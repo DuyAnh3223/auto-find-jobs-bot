@@ -33,7 +33,7 @@ def test_scan_continues_after_group_error_and_deduplicates(tmp_path, monkeypatch
 def test_session_failure_stops_scheduler(tmp_path, monkeypatch):
     worker = MonitorWorker(Store(tmp_path / "monitor.db"), tmp_path)
 
-    def expired(settings):
+    def expired(settings, *args):
         raise SessionRequired("login required")
 
     monkeypatch.setattr(worker, "scan_once", expired)
@@ -91,7 +91,7 @@ def test_stop_interrupts_interval_and_prevents_overlapping_start(tmp_path, monke
     entered, release = Event(), Event()
     calls = []
 
-    def scan(settings):
+    def scan(settings, *args):
         calls.append(1)
         entered.set()
         release.wait(2)
@@ -120,7 +120,7 @@ def test_interval_is_start_to_start_without_catchup_burst(tmp_path, monkeypatch)
             return True
 
     worker.stop_event = WaitOnce()
-    monkeypatch.setattr(worker, "scan_once", lambda settings: None)
+    monkeypatch.setattr(worker, "scan_once", lambda settings, *args: True)
     clock = iter([0, 15, 0, 1300])
     monkeypatch.setattr("monitor.worker.time.monotonic", lambda: next(clock))
     worker._run(Settings(interval_minutes=20), "scan")

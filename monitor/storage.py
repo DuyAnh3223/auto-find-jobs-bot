@@ -40,6 +40,8 @@ class Store:
                     reason TEXT NOT NULL, read_count INTEGER,
                     resolved INTEGER NOT NULL DEFAULT 0,
                     revision INTEGER NOT NULL DEFAULT 1);
+                CREATE TABLE IF NOT EXISTS daily_deep_scans (
+                    scan_date TEXT PRIMARY KEY, completed_at TEXT NOT NULL);
             """)
             # Retire only legacy limit-only warnings, preserving actual reading errors.
             db.execute("""UPDATE scan_checks SET resolved=1
@@ -99,6 +101,15 @@ class Store:
         with self.connect() as db:
             db.execute("UPDATE scan_checks SET resolved=1 WHERE group_url=? AND revision=?",
                        (url, revision))
+
+    def deep_scan_completed(self, scan_date):
+        with self.connect() as db:
+            return db.execute("SELECT 1 FROM daily_deep_scans WHERE scan_date=?", (scan_date,)).fetchone() is not None
+
+    def mark_deep_scan_completed(self, scan_date):
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO daily_deep_scans(scan_date, completed_at) VALUES (?,?)",
+                       (scan_date, now_iso()))
 
     def load_settings(self) -> Settings:
         with self.connect() as db:

@@ -150,6 +150,8 @@ class Settings:
     experience_keywords: list[str] = field(default_factory=list)
     interval_minutes: int = 20
     max_posts: int = 30
+    daily_deep_time: str = "07:00"
+    daily_deep_posts: int = 60
     browser: str = "msedge"
     auto_export: bool = True
 
@@ -158,6 +160,12 @@ class Settings:
             raise ValueError("Khoảng quét phải từ 10 đến 1440 phút.")
         if not 1 <= self.max_posts <= 100:
             raise ValueError("Giới hạn bài mỗi group phải từ 1 đến 100.")
+        if not 1 <= self.daily_deep_posts <= 100:
+            raise ValueError("Giới hạn lượt đầu ngày phải từ 1 đến 100.")
+        try:
+            datetime.strptime(self.daily_deep_time, "%H:%M")
+        except ValueError:
+            raise ValueError("Giờ lượt đầu ngày phải có dạng HH:MM.") from None
         if self.browser not in {"chrome", "msedge"}:
             raise ValueError("Hãy chọn Chrome hoặc Edge.")
         urls = set()

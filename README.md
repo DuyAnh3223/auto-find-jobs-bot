@@ -78,6 +78,11 @@ app.lock                    # Khóa ngăn mở hai app trên cùng dữ liệu
 
 ## Giới hạn Facebook cần biết
 
+- Có thể chạy tự động theo ngày: bot chờ đến **Giờ lượt đầu ngày**, quét số bài sâu đã đặt,
+  rồi tự chuyển sang số bài và khoảng quét thường. Ngày đã hoàn tất được lưu trong SQLite,
+  nên khởi động lại app trong cùng ngày không lặp lại lượt sâu. Mặc định phù hợp với cấu hình hiện tại:
+  **07:00 · 60 bài/group**, sau đó **20 bài/group mỗi 45 phút**.
+
 - Bot yêu cầu đăng nhập, kể cả khi theo dõi group công khai. Chỉ đọc nội dung phiên đó truy cập được.
 - Mở feed với yêu cầu sắp xếp thời gian; Facebook có thể không tuân theo thứ tự này.
   “Bài mới” ở V1 là **bài mới phát hiện trong phần feed giới hạn**, không phải cam kết quét đủ mọi bài.

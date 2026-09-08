@@ -9,11 +9,17 @@ def test_gui_config_history_open_link_and_busy_controls(tmp_path, monkeypatch):
         app.settings.groups = [Group("IT Jobs", "https://www.facebook.com/groups/123")]
         app.draw_groups()
         app.interval.set("30")
+        app.max_posts.set("20")
+        app.deep_time.set("07:00")
+        app.deep_posts.set("60")
         app.keywords.delete("1.0", "end")
         app.keywords.insert("1.0", "java intern\nspring boot")
         app.save_settings()
         saved = app.store.load_settings()
         assert saved.interval_minutes == 30
+        assert saved.max_posts == 20
+        assert saved.daily_deep_time == "07:00"
+        assert saved.daily_deep_posts == 60
         assert saved.keywords == ["java intern", "spring boot"]
         app.set_busy(True)
         assert app.start_button.cget("state") == "disabled"

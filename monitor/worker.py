@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 from queue import SimpleQueue
 from threading import Event, Thread
@@ -45,8 +46,27 @@ class MonitorWorker:
                 login(self.data_dir, settings.browser, self.stop_event, self.confirm_event, self.emit)
             else:
                 while not self.stop_event.is_set():
+                    today = datetime.now().date().isoformat()
+                    deep = not self.store.deep_scan_completed(today)
+                    if deep:
+                        target = datetime.combine(
+                            datetime.now().date(),
+                            datetime.strptime(settings.daily_deep_time, "%H:%M").time(),
+                        )
+                        wait_until = (target - datetime.now()).total_seconds()
+                        if wait_until > 0:
+                            self.emit("waiting", time.time() + wait_until)
+                            if self.stop_event.wait(wait_until):
+                                break
+                            continue
                     started = time.monotonic()
-                    self.scan_once(settings)
+                    self.emit("status", "Đang quét lượt đầu ngày…" if deep else "Đang quét lượt định kỳ…")
+                    completed = self.scan_once(
+                        settings, settings.daily_deep_posts if deep else settings.max_posts
+                    )
+                    if deep and completed:
+                        self.store.mark_deep_scan_completed(today)
+                        self.emit("log", f"Đã hoàn tất lượt đầu ngày ({settings.daily_deep_posts} bài/group).")
                     if self.stop_event.is_set():
                         break
                     # Start-to-start interval; overdue scans wait a full interval to avoid catch-up bursts.
@@ -66,8 +86,9 @@ class MonitorWorker:
         finally:
             self.emit("finished", "Đã dừng")
 
-    def scan_once(self, settings):
+    def scan_once(self, settings, max_posts=None):
         self.emit("status", "Đang quét…")
+        scan_limit = max_posts if max_posts is not None else settings.max_posts
         count, failures, successes, saved = 0, 0, 0, 0
 
         def save(post):
@@ -108,7 +129,7 @@ class MonitorWorker:
                         context,
                         group,
                         candidate_keywords,
-                        settings.max_posts,
+                        scan_limit,
                         self.stop_event,
                         report,
                         lambda post: save(
@@ -140,7 +161,7 @@ class MonitorWorker:
                 "log",
                 "Không có group nào đọc thành công. Giữ nguyên file Excel; cần kiểm tra lỗi đọc Facebook.",
             )
-            return
+            return False
         if failures and saved:
             self.emit(
                 "log",
@@ -162,3 +183,4 @@ class MonitorWorker:
                     f"Xuất Excel thất bại (SQLite đã lưu): {exc}. "
                     "Nếu file đang mở trong Excel, hãy đóng file trước lượt tiếp theo.",
                 )
+        return successes > 0

@@ -100,17 +100,24 @@ class MonitorApp(ctk.CTk):
         options.grid(row=11, column=0, padx=16, pady=8, sticky="ew")
         self.interval = ctk.StringVar(value=str(self.settings.interval_minutes))
         self.max_posts = ctk.StringVar(value=str(self.settings.max_posts))
+        self.deep_time = ctk.StringVar(value=self.settings.daily_deep_time)
+        self.deep_posts = ctk.StringVar(value=str(self.settings.daily_deep_posts))
         for index, (label, var) in enumerate(
-            [("Quét mỗi (phút)", self.interval), ("Tối đa bài / group", self.max_posts)]
+            [
+                ("Quét thường mỗi (phút)", self.interval),
+                ("Bài / group lượt thường", self.max_posts),
+                ("Giờ lượt đầu ngày (HH:MM)", self.deep_time),
+                ("Bài / group lượt đầu ngày", self.deep_posts),
+            ]
         ):
             ctk.CTkLabel(options, text=label).grid(row=index, column=0, sticky="w", pady=4)
             entry = ctk.CTkEntry(options, width=90, textvariable=var)
             entry.grid(row=index, column=1, padx=(20, 0), pady=4)
             self.edit_controls.append(entry)
         self.browser = ctk.StringVar(value="Edge" if self.settings.browser == "msedge" else "Chrome")
-        ctk.CTkLabel(options, text="Trình duyệt").grid(row=2, column=0, sticky="w", pady=4)
+        ctk.CTkLabel(options, text="Trình duyệt").grid(row=4, column=0, sticky="w", pady=4)
         menu = ctk.CTkOptionMenu(options, values=["Edge", "Chrome"], variable=self.browser, width=90)
-        menu.grid(row=2, column=1, padx=(20, 0), pady=4)
+        menu.grid(row=4, column=1, padx=(20, 0), pady=4)
         self.edit_controls.append(menu)
         self.auto_export = ctk.BooleanVar(value=self.settings.auto_export)
         auto = ctk.CTkCheckBox(panel, text="Tự cập nhật Excel sau mỗi lượt", variable=self.auto_export)
@@ -234,6 +241,7 @@ class MonitorApp(ctk.CTk):
         self.sync_group_flags()
         try:
             interval, limit = int(self.interval.get()), int(self.max_posts.get())
+            deep_posts = int(self.deep_posts.get())
         except ValueError:
             raise ValueError("Khoảng quét và số bài phải là số nguyên.") from None
         settings = Settings(
@@ -243,6 +251,8 @@ class MonitorApp(ctk.CTk):
             experience_keywords=self.experience_box.get("1.0", "end").splitlines(),
             interval_minutes=interval,
             max_posts=limit,
+            daily_deep_time=self.deep_time.get().strip(),
+            daily_deep_posts=deep_posts,
             browser="msedge" if self.browser.get() == "Edge" else "chrome",
             auto_export=self.auto_export.get(),
         )
