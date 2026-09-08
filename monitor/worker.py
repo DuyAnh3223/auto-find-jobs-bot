@@ -4,6 +4,7 @@ from pathlib import Path
 from queue import SimpleQueue
 from threading import Event, Thread
 
+from monitor.core import classify_content
 from monitor.exporter import export_posts
 from monitor.facebook import ScanStopped, SessionRequired, check_stop, login, open_browser, read_group
 
@@ -76,30 +77,64 @@ class MonitorWorker:
             saved += 1
             self.emit("results", "")
 
+        candidate_keywords = settings.keywords or settings.location_keywords or settings.experience_keywords
+        for group in settings.groups:
+            if group.enabled:
+                self.store.record_scan_check(
+                    group, "pending", "Chưa hoàn tất trong lượt này; nếu lượt bị dừng, cần kiểm tra thủ công"
+                )
+        self.emit("checks", "")
         with open_browser(self.data_dir, settings.browser) as context:
             for group in settings.groups:
                 check_stop(self.stop_event)
                 if not group.enabled:
                     continue
                 self.emit("status", f"Đang đọc: {group.name}")
+                reported = False
+
+                def report(kind, value):
+                    nonlocal reported
+                    if kind == "scan_report":
+                        self.store.record_scan_check(group, **value)
+                        if value["severity"] == "info":
+                            self.emit("log", f"{group.name}: {value['reason']} (thông tin lượt quét).")
+                        reported = True
+                        self.emit("checks", "")
+                    else:
+                        self.emit(kind, value)
+
                 try:
                     read_group(
                         context,
                         group,
-                        settings.keywords,
+                        candidate_keywords,
                         settings.max_posts,
                         self.stop_event,
-                        self.emit,
-                        save,
+                        report,
+                        lambda post: save(
+                            post.__class__(
+                                **{
+                                    **post.__dict__,
+                                    "bot_status": classify_content(post.content, settings, post.keywords),
+                                }
+                            )
+                        ),
                     )
                     successes += 1
-                except (ScanStopped, SessionRequired):
+                except (ScanStopped, SessionRequired) as exc:
+                    if not reported:
+                        self.store.record_scan_check(group, "error", f"Quét bị dừng: {exc}")
+                        self.emit("checks", "")
                     raise
                 except Exception as exc:
                     failures += 1
+                    if not reported:
+                        self.store.record_scan_check(group, "error", str(exc))
+                        self.emit("checks", "")
                     logging.exception("Group scan failed: %s", group.url)
                     self.emit("log", f"Lỗi group {group.name}: {exc}")
         self.emit("log", f"Kết thúc lượt quét: {count} bài mới; {failures} group lỗi.")
+        self.emit("log", f"Có {len(self.store.scan_checks())} group cần kiểm tra — mở ‘Kiểm tra group’.")
         if not successes and not saved:
             self.emit(
                 "log",
@@ -114,7 +149,12 @@ class MonitorWorker:
         if settings.auto_export:
             try:
                 target = self.data_dir / "exports" / "results.xlsx"
-                export_posts(self.store.posts(), target)
+                rows = [
+                    row
+                    for row in self.store.grouped_posts(category="all")
+                    if row.get("status") in {"suitable", "review"}
+                ]
+                export_posts(rows, target)
                 self.emit("log", f"Đã cập nhật Excel: {target}")
             except Exception as exc:
                 self.emit(

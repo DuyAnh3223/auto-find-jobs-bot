@@ -214,13 +214,17 @@ def read_group(context, group: Group, keywords, max_posts, stop, emit, on_post):
     missing_text, missing_link = set(), set()
     max_cards, transient_cards = 0, 0
     delivered, matched = 0, 0
+    failure = None
+    idle_rounds = 0
+    stop_reason = "Đạt giới hạn 40 vòng đọc/cuộn; chưa xác nhận đã đọc hết"
     try:
         check_stop(stop)
         page.goto(group.url + "?sorting_setting=CHRONOLOGICAL", wait_until="domcontentloaded")
         pause(stop, 3)
         require_session(context, page)
         # Finite scan budget even when Facebook repeats cards or gives no usable IDs.
-        for _ in range(10):
+        for round_index in range(40):
+            before = len(visited)
             check_stop(stop)
             require_session(context, page)
             selector = '[role="feed"] > div'
@@ -271,8 +275,6 @@ def read_group(context, group: Group, keywords, max_posts, stop, emit, on_post):
                         missing_text.add(fingerprint)
                     if not identity:
                         missing_link.add(fingerprint)
-                    if len(visited) + len(unreadable) >= max_posts:
-                        break
                     continue
                 if identity in visited:
                     continue
@@ -288,13 +290,21 @@ def read_group(context, group: Group, keywords, max_posts, stop, emit, on_post):
                             hits,
                             posted_at=parse_posted_time(time_data),
                             posted_time_raw=(time_data.get("raw") or "").strip(),
+                            bot_status="suitable",
                         )
                     )
                     matched += 1
                 delivered += 1
-                if len(visited) + len(unreadable) >= max_posts:
+                if len(visited) >= max_posts:
                     break
-            if len(visited) + len(unreadable) >= max_posts:
+            if len(visited) >= max_posts:
+                stop_reason = "Đạt số bài đã đặt; chưa xác nhận đã đọc hết group"
+                break
+            idle_rounds = idle_rounds + 1 if len(visited) == before else 0
+            if idle_rounds >= 5:
+                stop_reason = "5 vòng liên tiếp không đọc thêm được bài; chưa xác nhận đã đọc hết"
+                break
+            if round_index == 39:
                 break
             page.evaluate("window.scrollBy(0, window.innerHeight * 1.5)")
             pause(stop, 2)
@@ -308,8 +318,25 @@ def read_group(context, group: Group, keywords, max_posts, stop, emit, on_post):
             )
         emit(
             "log",
-            f"{group.name}: đọc {delivered} bài, {matched} khớp; "
+            f"{group.name}: đọc {delivered}/{max_posts} bài, {matched} khớp; "
             f"bỏ qua {len(unreadable)} thẻ không đủ nội dung/link, {transient_cards} lần thẻ đổi/timeout.",
         )
+    except Exception as exc:
+        failure = exc
+        raise
     finally:
+        reasons = []
+        if failure is not None:
+            reasons.append(f"Quét gián đoạn/lỗi: {failure}")
+        if unreadable:
+            reasons.append(f"{len(unreadable)} thẻ thiếu nội dung/link")
+        if transient_cards:
+            reasons.append(f"{transient_cards} lần thẻ đổi/timeout")
+        severity = "error" if failure is not None else "warning" if reasons else "info"
+        if failure is None:
+            reasons.append(f"Đọc {delivered}/{max_posts} bài — {stop_reason}")
+        emit("scan_report", {
+            "severity": severity,
+            "reason": "; ".join(reasons), "read_count": delivered,
+        })
         page.close()
