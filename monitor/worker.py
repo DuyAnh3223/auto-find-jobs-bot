@@ -1,11 +1,10 @@
 import logging
 import time
-from datetime import datetime
 from pathlib import Path
 from queue import SimpleQueue
 from threading import Event, Thread
 
-from monitor.core import classify_content
+from monitor.core import classify_content, job_location
 from monitor.exporter import export_posts
 from monitor.facebook import ScanStopped, SessionRequired, check_stop, login, open_browser, read_group
 
@@ -18,6 +17,7 @@ class MonitorWorker:
         self.stop_event = Event()
         self.confirm_event = Event()
         self.thread = None
+        self.initial_scan_done = False
 
     @property
     def running(self):
@@ -46,27 +46,15 @@ class MonitorWorker:
                 login(self.data_dir, settings.browser, self.stop_event, self.confirm_event, self.emit)
             else:
                 while not self.stop_event.is_set():
-                    today = datetime.now().date().isoformat()
-                    deep = not self.store.deep_scan_completed(today)
-                    if deep:
-                        target = datetime.combine(
-                            datetime.now().date(),
-                            datetime.strptime(settings.daily_deep_time, "%H:%M").time(),
-                        )
-                        wait_until = (target - datetime.now()).total_seconds()
-                        if wait_until > 0:
-                            self.emit("waiting", time.time() + wait_until)
-                            if self.stop_event.wait(wait_until):
-                                break
-                            continue
+                    deep = not self.initial_scan_done
                     started = time.monotonic()
-                    self.emit("status", "Đang quét lượt đầu ngày…" if deep else "Đang quét lượt định kỳ…")
+                    self.emit("log", "Quét lượt đầu phiên…" if deep else "Quét lượt định kỳ…")
                     completed = self.scan_once(
                         settings, settings.daily_deep_posts if deep else settings.max_posts
                     )
                     if deep and completed:
-                        self.store.mark_deep_scan_completed(today)
-                        self.emit("log", f"Đã hoàn tất lượt đầu ngày ({settings.daily_deep_posts} bài/group).")
+                        self.initial_scan_done = True
+                        self.emit("log", f"Đã chạy lượt đầu phiên ({settings.daily_deep_posts} bài/group).")
                     if self.stop_event.is_set():
                         break
                     # Start-to-start interval; overdue scans wait a full interval to avoid catch-up bursts.
@@ -93,6 +81,8 @@ class MonitorWorker:
 
         def save(post):
             nonlocal count, saved
+            if post.bot_status == "unsuitable" or job_location(post.content) == "outside":
+                return
             if self.store.save_post(post):
                 count += 1
             saved += 1
@@ -173,7 +163,7 @@ class MonitorWorker:
                 rows = [
                     row
                     for row in self.store.grouped_posts(category="all")
-                    if row.get("status") in {"suitable", "review"}
+                    if row.get("status") in {"suitable", "review"} and row["location"] == "hcm"
                 ]
                 export_posts(rows, target)
                 self.emit("log", f"Đã cập nhật Excel: {target}")

@@ -93,6 +93,10 @@ class MonitorApp(ctk.CTk):
         self.keywords.insert("1.0", "\n".join(self.settings.keywords))
         self.edit_controls.append(self.keywords)
         self.location_box = self._criteria_box(panel, "ĐỊA ĐIỂM · OR", self.settings.location_keywords, 7)
+        self.location_box.delete("1.0", "end")
+        self.location_box.insert("1.0", "HCM · TP.HCM · Hồ Chí Minh · Sài Gòn\nNgoài HCM tự bỏ qua; chưa rõ địa điểm xem riêng.")
+        self.location_box.configure(state="disabled")
+        self.edit_controls.remove(self.location_box)
         self.experience_box = self._criteria_box(
             panel, "KINH NGHIỆM · OR", self.settings.experience_keywords, 9
         )
@@ -106,8 +110,7 @@ class MonitorApp(ctk.CTk):
             [
                 ("Quét thường mỗi (phút)", self.interval),
                 ("Bài / group lượt thường", self.max_posts),
-                ("Giờ lượt đầu ngày (HH:MM)", self.deep_time),
-                ("Bài / group lượt đầu ngày", self.deep_posts),
+                ("Bài / group khi mở bot", self.deep_posts),
             ]
         ):
             ctk.CTkLabel(options, text=label).grid(row=index, column=0, sticky="w", pady=4)
@@ -247,7 +250,7 @@ class MonitorApp(ctk.CTk):
         settings = Settings(
             groups=[Group(g.name, g.url, g.enabled) for g in self.settings.groups],
             keywords=self.keywords.get("1.0", "end").splitlines(),
-            location_keywords=self.location_box.get("1.0", "end").splitlines(),
+            location_keywords=self.settings.location_keywords,
             experience_keywords=self.experience_box.get("1.0", "end").splitlines(),
             interval_minutes=interval,
             max_posts=limit,
@@ -316,23 +319,30 @@ class MonitorApp(ctk.CTk):
         self.checks_button.grid(row=0, column=0, sticky="e")
         tabs = ctk.CTkFrame(panel, fg_color="transparent")
         tabs.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        ctk.CTkButton(tabs, text="Theo dõi ứng tuyển", command=self.open_tracker).pack(side="left")
-        ctk.CTkLabel(tabs, text="Đánh giá").pack(side="left", padx=(20, 5))
+        ctk.CTkButton(tabs, text="Theo dõi ứng tuyển", command=self.open_tracker).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ctk.CTkLabel(tabs, text="Địa điểm").grid(row=1, column=0, padx=(0, 5))
+        self.location_filter = ctk.CTkOptionMenu(
+            tabs, values=["HCM", "Chưa rõ địa điểm", "Tất cả"], width=150,
+            command=lambda _: self.search_results(),
+        )
+        self.location_filter.grid(row=1, column=1)
+        ctk.CTkLabel(tabs, text="Đánh giá").grid(row=1, column=2, padx=(12, 5))
         self.evaluation_filter = ctk.CTkOptionMenu(
             tabs,
             values=["Tất cả", "Phù hợp", "Cần xem lại"],
-            width=135,
+            width=120,
             command=lambda _: self.search_results(),
         )
-        self.evaluation_filter.pack(side="left")
-        ctk.CTkLabel(tabs, text="Xử lý").pack(side="left", padx=(14, 5))
+        self.evaluation_filter.grid(row=1, column=3)
+        ctk.CTkLabel(tabs, text="Xử lý").grid(row=1, column=4, padx=(12, 5))
         self.processing_filter = ctk.CTkOptionMenu(
             tabs,
             values=["Chưa xử lý", "Đã lưu", "Đã bỏ qua", "Tất cả"],
-            width=135,
+            width=120,
             command=lambda _: self.search_results(),
         )
-        self.processing_filter.pack(side="left")
+        self.processing_filter.grid(row=1, column=5)
         toolbar = ctk.CTkFrame(panel, fg_color="transparent")
         toolbar.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         self.search = ctk.CTkEntry(toolbar, placeholder_text="Tìm trong nội dung, group, từ khóa…")
@@ -458,7 +468,15 @@ class MonitorApp(ctk.CTk):
         self.offset = max(0, self.offset + direction * self.PAGE_SIZE)
         self.refresh_results()
 
+    @staticmethod
+    def evaluation_label(row):
+        return {"suitable": "Phù hợp", "review": "Cần xem lại",
+                "unsuitable": "Không phù hợp"}.get(row["evaluation"], "Cần xem lại")
+
     def filtered_rows(self):
+        location = {"HCM": "hcm", "Chưa rõ địa điểm": "unknown"}.get(
+            self.location_filter.get()
+        )
         evaluation = {"Phù hợp": "suitable", "Cần xem lại": "review"}.get(self.evaluation_filter.get())
         processing = {
             "Chưa xử lý": "unprocessed",
@@ -470,6 +488,8 @@ class MonitorApp(ctk.CTk):
             row
             for row in rows
             if row["evaluation"] in {"suitable", "review"}
+            and row["location"] != "outside"
+            and (location is None or row["location"] == location)
             and (evaluation is None or row["evaluation"] == evaluation)
             and (processing is None or row["processing"] == processing)
         ]
@@ -496,7 +516,7 @@ class MonitorApp(ctk.CTk):
                 else (),
                 values=(
                     row.get("application_status") or "Chưa lưu",
-                    "Phù hợp" if row["evaluation"] == "suitable" else "Cần xem lại",
+                    self.evaluation_label(row),
                     local_time(row["detected_at"])[:19],
                     row["group_name"],
                     ", ".join(json.loads(row["keywords"])),
@@ -522,7 +542,7 @@ class MonitorApp(ctk.CTk):
             self.set_text(
                 self.details,
                 f"{row['group_name']} · {', '.join(json.loads(row['keywords']))}\n"
-                f"Đánh giá: {'Phù hợp' if row['evaluation'] == 'suitable' else 'Cần xem lại'} · "
+                f"Đánh giá: {self.evaluation_label(row)} · "
                 f"Theo dõi: {row.get('application_status') or 'Chưa lưu'} · "
                 f"{len(row.get('source_urls', [row['url']]))} bài trùng nội dung\n"
                 f"{row['url']}\nNguồn: {' | '.join(row.get('source_urls', [row['url']]))}\n"

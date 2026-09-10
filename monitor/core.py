@@ -34,6 +34,33 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(normalized_content(text).encode("utf-8")).hexdigest()
 
 
+def job_location(text: str) -> str:
+    """Text-only detection: missing location stays unknown, never assumed outside HCM."""
+    folded = unicodedata.normalize("NFKD", text.casefold()).replace("đ", "d")
+    folded = "".join(char for char in folded if not unicodedata.combining(char))
+    lines = folded.splitlines()
+    explicit = [line for line in lines if re.search(
+        r"dia diem lam viec|noi lam viec|lam viec tai|work location|working location|job location", line
+    )]
+    if explicit:
+        for index, line in enumerate(lines[:-1]):
+            if line in explicit and re.search(r":\s*$", line):
+                explicit.append(lines[index + 1])
+    scope = " ".join(explicit) if explicit else folded
+    if re.search(
+        r"(?<!\w)(?:hcm|hcmc|tp[.\s]*hcm|tp[.\s]*hcmc|ho\s*chi\s*minh|hochiminh|sai\s*gon|saigon)(?!\w)",
+        scope,
+    ):
+        return "hcm"
+    if re.search(
+        r"(?<!\w)(?:ha\s*noi|hanoi|hn|da\s*nang|danang|hai\s*phong|haiphong|"
+        r"can tho|hai duong|bac ninh|bac giang|quang ninh|nha trang|da lat|hue|"
+        r"quy nhon|vinh|thanh hoa|nghe an)(?!\w)", scope
+    ):
+        return "outside"
+    return "unknown"
+
+
 def classify_content(
     text: str, settings: "Settings", matched_position_keywords: list[str] | None = None
 ) -> str:
@@ -50,13 +77,9 @@ def classify_content(
     if not position_ok:
         return "unsuitable"
     lower = normalize(text)
-    if settings.location_keywords:
-        location_ok = bool(match_keywords(text, settings.location_keywords))
-        wrong_location = any(token in lower for token in ("hà nội", "ha noi", "đà nẵng", "da nang", "hanoi"))
-        if not location_ok and wrong_location:
-            return "unsuitable"
-        if not location_ok:
-            return "review"
+    location = job_location(text)
+    if location == "outside":
+        return "unsuitable"
     if settings.experience_keywords:
         experience_ok = bool(match_keywords(text, settings.experience_keywords))
         senior_only = any(
@@ -84,7 +107,7 @@ def classify_content(
             return "unsuitable"
         if not experience_ok:
             return "review"
-    return "suitable"
+    return "review" if location == "unknown" else "suitable"
 
 
 def facebook_url(value: str):
@@ -148,10 +171,11 @@ class Settings:
     )
     location_keywords: list[str] = field(default_factory=list)
     experience_keywords: list[str] = field(default_factory=list)
-    interval_minutes: int = 45
+    interval_minutes: int = 30
     max_posts: int = 20
     daily_deep_time: str = "07:00"
     daily_deep_posts: int = 60
+    startup_schedule_version: int = 1
     browser: str = "msedge"
     auto_export: bool = True
 
@@ -191,6 +215,9 @@ class Settings:
     @classmethod
     def from_dict(cls, data):
         data = dict(data)
+        if "startup_schedule_version" not in data:
+            data.update(interval_minutes=30, max_posts=20, daily_deep_posts=60,
+                        startup_schedule_version=1)
         data["groups"] = [Group(**g) for g in data.get("groups", [])]
         settings = cls(**data)
         settings.validate()

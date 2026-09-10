@@ -10,6 +10,7 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description="Facebook Group Monitor")
     parser.add_argument("--data-dir", type=Path, help="Override app data directory")
+    parser.add_argument("--autostart", action="store_true", help="Start scanning immediately after Windows sign-in")
     parser.add_argument(
         "--smoke-test", action="store_true", help="Open hidden GUI, verify widgets, exit without Facebook"
     )
@@ -66,6 +67,8 @@ def main():
             app.refresh_results()
             verify_runtime(data_dir)
             app.after(400, app.close_app)
+        elif args.autostart:
+            app.after(1000, app.start_scan)
         app.mainloop()
         if args.smoke_test:
             (data_dir / "smoke-ok.txt").write_text(

@@ -33,7 +33,7 @@ def test_gui_config_history_open_link_and_busy_controls(tmp_path, monkeypatch):
             "https://www.facebook.com/groups/123/posts/456",
             "IT Jobs",
             "https://www.facebook.com/groups/123",
-            "Tuyển Java Intern",
+            "Tuyển Java Intern HCM",
             ["java intern"],
         )
         app.store.save_post(post)

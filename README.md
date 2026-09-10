@@ -78,10 +78,14 @@ app.lock                    # Khóa ngăn mở hai app trên cùng dữ liệu
 
 ## Giới hạn Facebook cần biết
 
-- Có thể chạy tự động theo ngày: bot chờ đến **Giờ lượt đầu ngày**, quét số bài sâu đã đặt,
-  rồi tự chuyển sang số bài và khoảng quét thường. Ngày đã hoàn tất được lưu trong SQLite,
-  nên khởi động lại app trong cùng ngày không lặp lại lượt sâu. Mặc định phù hợp với cấu hình hiện tại:
-  **07:00 · 60 bài/group**, sau đó **20 bài/group mỗi 45 phút**.
+- Tự chạy khi đăng nhập Windows: chạy `windows-startup.ps1` để đăng ký, hoặc thêm `-Disable`
+  để tắt. Giữ nguyên thư mục bản exe đã đăng ký. Windows mở bot với `--autostart` và tự START.
+  Mỗi lần mở tiến trình bot mới quét **60 bài/group** ngay, sau đó **20 bài/group mỗi 30 phút**.
+  STOP/START trong cùng cửa sổ không lặp lượt sâu đã chạy; đóng rồi mở bot và START sẽ chạy sâu lại.
+  Bản nâng cấp chuyển cấu hình lịch cũ sang 60/20/30 một lần; sau đó có thể chỉnh và lưu tùy ý.
+  Giờ 07:00 và dấu hoàn tất theo ngày không còn điều khiển lịch. Máy phải đăng nhập Windows,
+  không ngủ, và phiên Facebook còn hợp lệ. Hết phiên Facebook thì bot dừng để bạn đăng nhập lại.
+  Khoảng quét tính từ đầu lượt; lượt kéo dài hơn khoảng đặt sẽ nghỉ thêm trọn khoảng sau khi xong.
 
 - Bot yêu cầu đăng nhập, kể cả khi theo dõi group công khai. Chỉ đọc nội dung phiên đó truy cập được.
 - Mở feed với yêu cầu sắp xếp thời gian; Facebook có thể không tuân theo thứ tự này.
@@ -183,6 +187,20 @@ Tài liệu kỹ thuật tham khảo:
 
 ## Duyệt bài và theo dõi ứng tuyển
 
+- Danh sách mặc định **HCM** chỉ hiện bài nhận diện có HCM/TP.HCM/Hồ Chí Minh/Sài Gòn
+  và qua bộ lọc vị trí/kinh nghiệm. **Chưa rõ địa điểm** xem riêng.
+  Bài nhận diện ngoài HCM được bỏ qua trước khi lưu kết quả mới. Bài ngoài HCM đã lưu trước đây
+  không hiện trong danh sách, kể cả khi chọn Tất cả; hồ sơ ứng tuyển giữ nguyên.
+  Bài đã đánh giá **Không phù hợp** theo vị trí hoặc kinh nghiệm cũng không được lưu mới;
+  dữ liệu cũ loại này được ẩn khỏi toàn bộ bộ lọc.
+  Bot vẫn phải đọc nội dung để nhận diện địa điểm; số bài mục tiêu tính cả bài bị loại.
+  Ba bộ lọc độc lập: **Địa điểm** (HCM/Chưa rõ địa điểm/Tất cả),
+  **Đánh giá** (Tất cả/Phù hợp/Cần xem lại), **Xử lý**. Mặc định HCM + Tất cả + Chưa xử lý.
+  Excel tự động chỉ xuất nhóm HCM;
+  xuất thủ công theo bộ lọc đang chọn. Hồ sơ ứng tuyển đã lưu vẫn giữ nguyên.
+  Nhận diện ưu tiên dòng ghi nơi làm việc; bài tuyển HCM và nơi khác vẫn giữ.
+  Đây là quy tắc văn bản, không hiểu hết ngữ cảnh, không đọc địa chỉ trong ảnh;
+  địa danh chưa nhận diện được nằm ở nhóm chưa rõ, không khẳng định là ngoài HCM.
 - **Kiểm tra group (N)** mở danh sách cảnh báo ngay trong cửa sổ chính: lỗi/gián đoạn,
   thẻ thiếu nội dung/link, thẻ đổi/timeout.
   Hiển thị thời gian, số bài đọc thực tế, URL và nút **Mở group**, **Đã kiểm tra**.

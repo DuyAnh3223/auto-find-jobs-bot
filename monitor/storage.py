@@ -3,7 +3,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from monitor.core import Post, Settings, content_hash, now_iso
+from monitor.core import Post, Settings, content_hash, job_location, now_iso
 
 
 class Store:
@@ -227,6 +227,7 @@ class Store:
             first["content_hash"] = digest
             first["status"] = status
             first["evaluation"] = self._evaluation_status(rows)
+            first["location"] = job_location(first["content"])
             first["user_decision"] = "skipped" if status == "skipped" else None
             first["group_name"] = ", ".join(dict.fromkeys(row["group_name"] for row in rows))
             first["group_url"] = rows[0]["group_url"]

@@ -71,14 +71,14 @@ def test_partial_failure_exports_new_and_refreshed_posts(tmp_path, monkeypatch):
     worker = MonitorWorker(Store(tmp_path / "monitor.db"), tmp_path)
     monkeypatch.setattr("monitor.worker.open_browser", lambda *args: nullcontext(object()))
     settings = Settings(groups=[Group("group", "https://www.facebook.com/groups/1")])
-    contents = iter(["Java first content", "Java updated content"])
+    contents = iter(["Java first content HCM", "Java updated content HCM"])
 
     def partial(context, group, keywords, limit, stop, emit, on_post):
         on_post(Post(group.url + "/posts/10", group.name, group.url, next(contents), ["java"]))
         raise RuntimeError("feed interrupted after save")
 
     monkeypatch.setattr("monitor.worker.read_group", partial)
-    for expected in ["Java first content", "Java updated content"]:
+    for expected in ["Java first content HCM", "Java updated content HCM"]:
         worker.scan_once(settings)
         book = load_workbook(tmp_path / "exports" / "results.xlsx")
         assert book.active["I2"].value == expected
