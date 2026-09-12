@@ -42,6 +42,10 @@ def test_gui_config_history_open_link_and_busy_controls(tmp_path, monkeypatch):
         app.table.selection_set(key)
         app.show_details()
         assert post.content in app.details.get("1.0", "end")
+        app.create_application_from_post()
+        assert app.tracker.fields["source_url"].get() == post.url
+        assert post.content in app.tracker.notes.get("1.0", "end")
+        app.show_posts()
         opened = []
         monkeypatch.setattr("monitor.app.webbrowser.open", opened.append)
         app.open_post()

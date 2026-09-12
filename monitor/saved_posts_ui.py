@@ -67,7 +67,7 @@ class SavedPostsPanel(ctk.CTkFrame):
         ctk.CTkLabel(actions, text="Nội dung bài đăng", font=("Segoe UI", 17, "bold")).pack(side="left")
         ctk.CTkButton(actions, text="Mở Facebook (O)", width=125, command=self.open_post).pack(side="right")
         ctk.CTkButton(
-            actions, text="+ Theo dõi ứng tuyển", width=155, command=self.create_application
+            actions, text="Tạo hồ sơ ứng tuyển", width=155, command=self.create_application
         ).pack(side="right", padx=6)
         ctk.CTkButton(
             actions, text="Bỏ lưu (D)", width=100, command=self.remove_current,

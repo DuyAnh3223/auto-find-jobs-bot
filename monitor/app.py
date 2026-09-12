@@ -418,6 +418,12 @@ class MonitorApp(ctk.CTk):
         detail_header = ctk.CTkFrame(detail_panel, fg_color="transparent")
         detail_header.grid(row=0, column=0, sticky="ew", padx=12, pady=10)
         ctk.CTkLabel(detail_header, text="Nội dung bài đăng", font=("Segoe UI", 17, "bold")).pack(side="left")
+        ctk.CTkButton(
+            detail_header,
+            text="Tạo hồ sơ ứng tuyển",
+            width=155,
+            command=self.create_application_from_post,
+        ).pack(side="right", padx=6)
         ctk.CTkButton(detail_header, text="Mở Facebook (O)", width=125, command=self.open_post).pack(side="right")
         self.consider_button = ctk.CTkButton(
             detail_header, text="Lưu xem xét (Y)", width=140, command=self.save_for_consideration
@@ -566,6 +572,11 @@ class MonitorApp(ctk.CTk):
         row = self.selected_row()
         if row and post_url(row["url"], row["group_url"]):
             webbrowser.open(row["url"])
+
+    def create_application_from_post(self):
+        row = self.selected_row()
+        if row:
+            self.open_tracker(row)
 
     def select_row(self, iid):
         if iid in self.rows:
