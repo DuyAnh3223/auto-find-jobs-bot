@@ -39,6 +39,7 @@ class MonitorApp(ctk.CTk):
         self.offset = 0
         self.rows = {}
         self.tracker = None
+        self.saved_panel = None
         self.checks_panel = None
         self.post_undo = []
         self.edit_controls = []
@@ -319,8 +320,10 @@ class MonitorApp(ctk.CTk):
         self.checks_button.grid(row=0, column=0, sticky="e")
         tabs = ctk.CTkFrame(panel, fg_color="transparent")
         tabs.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        ctk.CTkButton(tabs, text="Bài lưu xem xét", command=self.open_saved_considerations).grid(
+            row=0, column=0, sticky="w", pady=(0, 8))
         ctk.CTkButton(tabs, text="Theo dõi ứng tuyển", command=self.open_tracker).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+            row=0, column=1, sticky="w", padx=(8, 0), pady=(0, 8))
         ctk.CTkLabel(tabs, text="Địa điểm").grid(row=1, column=0, padx=(0, 5))
         self.location_filter = ctk.CTkOptionMenu(
             tabs, values=["HCM", "Chưa rõ địa điểm", "Tất cả"], width=150,
@@ -338,7 +341,7 @@ class MonitorApp(ctk.CTk):
         ctk.CTkLabel(tabs, text="Xử lý").grid(row=1, column=4, padx=(12, 5))
         self.processing_filter = ctk.CTkOptionMenu(
             tabs,
-            values=["Chưa xử lý", "Đã lưu", "Đã bỏ qua", "Tất cả"],
+            values=["Chưa xử lý", "Đã lưu xem xét", "Đang theo dõi", "Đã bỏ qua", "Tất cả"],
             width=120,
             command=lambda _: self.search_results(),
         )
@@ -480,7 +483,8 @@ class MonitorApp(ctk.CTk):
         evaluation = {"Phù hợp": "suitable", "Cần xem lại": "review"}.get(self.evaluation_filter.get())
         processing = {
             "Chưa xử lý": "unprocessed",
-            "Đã lưu": "tracked",
+            "Đã lưu xem xét": "considered",
+            "Đang theo dõi": "tracked",
             "Đã bỏ qua": "skipped",
         }.get(self.processing_filter.get())
         rows = self.store.grouped_posts(self.search.get().strip(), category="all")
@@ -515,7 +519,10 @@ class MonitorApp(ctk.CTk):
                 if row["evaluation"] == "review"
                 else (),
                 values=(
-                    row.get("application_status") or "Chưa lưu",
+                    row.get("application_status") or {
+                        "considered": "Đã lưu xem xét",
+                        "skipped": "Đã bỏ qua",
+                    }.get(row["processing"], "Chưa xử lý"),
                     self.evaluation_label(row),
                     local_time(row["detected_at"])[:19],
                     row["group_name"],
@@ -543,7 +550,7 @@ class MonitorApp(ctk.CTk):
                 self.details,
                 f"{row['group_name']} · {', '.join(json.loads(row['keywords']))}\n"
                 f"Đánh giá: {self.evaluation_label(row)} · "
-                f"Theo dõi: {row.get('application_status') or 'Chưa lưu'} · "
+                f"Theo dõi: {row.get('application_status') or {'considered': 'Đã lưu xem xét', 'skipped': 'Đã bỏ qua'}.get(row['processing'], 'Chưa xử lý')} · "
                 f"{len(row.get('source_urls', [row['url']]))} bài trùng nội dung\n"
                 f"{row['url']}\nNguồn: {' | '.join(row.get('source_urls', [row['url']]))}\n"
                 f"Ngày đăng: {local_time(row['posted_at']) or row['posted_time_raw'] or 'Không xác định'}"
@@ -600,21 +607,12 @@ class MonitorApp(ctk.CTk):
 
     def save_for_consideration(self):
         row = self.selected_row()
-        if not row or row.get("application_ids"):
+        if not row or row.get("user_decision") == "considered":
             return
         children = self.table.get_children()
         index = children.index(str(row["id"]))
-        value = {
-            "status": "Đang xem xét",
-            "source_url": row["url"],
-            "notes": row["content"],
-        }
-        try:
-            application_id = self.store.save_application(value)
-        except ValueError as exc:
-            messagebox.showerror("Không lưu được", str(exc), parent=self)
-            return
-        self.post_undo.append(("consider", application_id, str(row["id"])))
+        self.store.set_user_decision(row["content_hash"], "considered")
+        self.post_undo.append(("consider", row["content_hash"], str(row["id"])))
         self.move_after_post_action(str(row["id"]), index)
 
     def mark_skipped(self):
@@ -627,7 +625,7 @@ class MonitorApp(ctk.CTk):
         self.post_undo.append(("skip", row["content_hash"], str(row["id"])))
         self.move_after_post_action(str(row["id"]), index)
 
-    def open_tracker(self):
+    def open_tracker(self, source=None):
         from monitor.tracking_ui import TrackingPanel
 
         if self.tracker is None or not self.tracker.winfo_exists():
@@ -635,12 +633,34 @@ class MonitorApp(ctk.CTk):
         else:
             self.tracker.refresh()
         self.results_panel.grid_remove()
+        if self.saved_panel is not None and self.saved_panel.winfo_ismapped():
+            self.saved_panel.grid_remove()
+        if source:
+            self.tracker.new(source)
         self.tracker.grid(row=0, column=1, padx=12, pady=12, sticky="nsew")
         self.tracker.focus_set()
 
+    def open_saved_considerations(self):
+        from monitor.saved_posts_ui import SavedPostsPanel
+
+        if self.saved_panel is None or not self.saved_panel.winfo_exists():
+            self.saved_panel = SavedPostsPanel(
+                self, self.store, self.refresh_results, self.show_posts, self.open_tracker
+            )
+        else:
+            self.saved_panel.refresh()
+        self.results_panel.grid_remove()
+        if self.tracker is not None and self.tracker.winfo_ismapped():
+            self.tracker.grid_remove()
+        self.saved_panel.grid(row=0, column=1, padx=12, pady=12, sticky="nsew")
+        self.saved_panel.focus_set()
+
     def show_posts(self):
         # Keep the form alive so switching views preserves unsaved edits.
-        self.tracker.grid_remove()
+        if self.tracker is not None and self.tracker.winfo_ismapped():
+            self.tracker.grid_remove()
+        if self.saved_panel is not None and self.saved_panel.winfo_ismapped():
+            self.saved_panel.grid_remove()
         self.results_panel.grid()
         self.refresh_results()
 
@@ -654,6 +674,8 @@ class MonitorApp(ctk.CTk):
         if not self.editing_text():
             if self.tracker is not None and self.tracker.winfo_ismapped():
                 self.tracker.move_application(direction)
+            elif self.saved_panel is not None and self.saved_panel.winfo_ismapped():
+                self.saved_panel.move_post(direction)
             else:
                 self.move_post(direction)
             return "break"
@@ -665,14 +687,21 @@ class MonitorApp(ctk.CTk):
                 if event.keysym.lower() == "d":
                     self.tracker.delete_current()
                     return "break"
+            elif self.saved_panel is not None and self.saved_panel.winfo_ismapped():
+                if event.keysym.lower() == "d":
+                    self.saved_panel.remove_current()
+                    return "break"
             else:
                 action()
                 return "break"
         return None
 
     def handle_open_post_shortcut(self, event):
-        if (self.tracker is None or not self.tracker.winfo_ismapped()) and not self.editing_text():
-            self.open_post()
+        if not self.editing_text():
+            if self.saved_panel is not None and self.saved_panel.winfo_ismapped():
+                self.saved_panel.open_post()
+            elif self.tracker is None or not self.tracker.winfo_ismapped():
+                self.open_post()
             return "break"
         return None
 
@@ -687,6 +716,8 @@ class MonitorApp(ctk.CTk):
             return None
         if self.tracker is not None and self.tracker.winfo_ismapped():
             self.tracker.undo()
+        elif self.saved_panel is not None and self.saved_panel.winfo_ismapped():
+            self.saved_panel.undo()
         else:
             self.undo_post_action()
         return "break"
@@ -695,10 +726,7 @@ class MonitorApp(ctk.CTk):
         if not self.post_undo:
             return
         kind, value, row_id = self.post_undo.pop()
-        if kind == "consider":
-            self.store.delete_application(value)
-        else:
-            self.store.set_user_decision(value, None)
+        self.store.set_user_decision(value, None)
         self.refresh_results()
         self.select_row(row_id)
 

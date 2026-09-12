@@ -1,6 +1,6 @@
 import pytest
 
-from monitor.core import Post
+from monitor.core import Post, content_hash
 from monitor.storage import Store
 from monitor.tracking import STATUSES, validate_application
 
@@ -82,6 +82,43 @@ def test_consideration_can_be_saved_before_company_and_position(tmp_path):
     assert saved["company"] == ""
     with pytest.raises(ValueError):
         store.save_application({**saved, "status": "Đã ứng tuyển"}, identity)
+
+
+def test_saved_post_consideration_is_separate_from_application_tracker(tmp_path):
+    store = Store(tmp_path / "monitor.db")
+    post = Post(
+        "https://www.facebook.com/groups/1/posts/10",
+        "Java jobs",
+        "https://www.facebook.com/groups/1",
+        "Java Intern HCM",
+        ["java intern"],
+    )
+    store.save_post(post)
+    digest = store.grouped_posts(category="all")[0]["content_hash"]
+    store.set_user_decision(digest, "considered")
+
+    assert store.applications() == []
+    saved = store.saved_considerations()
+    assert len(saved) == 1
+    assert saved[0]["processing"] == "considered"
+
+
+def test_legacy_y_saved_application_migrates_to_saved_posts(tmp_path):
+    path = tmp_path / "monitor.db"
+    store = Store(path)
+    post = Post(
+        "https://www.facebook.com/groups/1/posts/10",
+        "Java jobs",
+        "https://www.facebook.com/groups/1",
+        "Java Intern HCM",
+        ["java intern"],
+    )
+    store.save_post(post)
+    store.save_application({"status": "Đang xem xét", "source_url": post.url, "notes": post.content})
+
+    migrated = Store(path)
+    assert migrated.applications() == []
+    assert [row["content_hash"] for row in migrated.saved_considerations()] == [content_hash(post.content)]
 
 
 def test_restore_application_keeps_identity_for_session_undo(tmp_path):

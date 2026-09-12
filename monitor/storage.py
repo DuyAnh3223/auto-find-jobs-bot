@@ -63,6 +63,35 @@ class Store:
                 "SELECT id, content FROM posts WHERE content_hash='' OR content_hash IS NULL"
             ).fetchall():
                 db.execute("UPDATE posts SET content_hash=? WHERE id=?", (content_hash(row[1]), row[0]))
+            self._migrate_legacy_considerations(db)
+
+    @staticmethod
+    def _migrate_legacy_considerations(db):
+        """Move pre-separation Y saves out of the application tracker once."""
+        from monitor.tracking import source_key
+
+        sources = {
+            source_key(row["url"]): row["content_hash"]
+            for row in db.execute("SELECT url, content_hash FROM posts")
+        }
+        for row in db.execute("SELECT id, value FROM applications").fetchall():
+            try:
+                value = json.loads(row["value"])
+            except json.JSONDecodeError:
+                continue
+            source = str(value.get("source_url", "")).strip()
+            digest = sources.get(source_key(source)) if source else None
+            is_legacy_save = (
+                value.get("status") == "Đang xem xét"
+                and not str(value.get("company", "")).strip()
+                and not str(value.get("position", "")).strip()
+                and digest
+                and str(value.get("notes", "")).strip()
+                and content_hash(value["notes"]) == digest
+            )
+            if is_legacy_save:
+                db.execute("UPDATE posts SET user_decision='considered' WHERE content_hash=?", (digest,))
+                db.execute("DELETE FROM applications WHERE id=?", (row["id"],))
 
     @contextmanager
     def connect(self):
@@ -176,7 +205,7 @@ class Store:
         return inserted
 
     def set_user_decision(self, digest: str, decision: str | None):
-        if decision not in {None, "suitable", "skipped"}:
+        if decision not in {None, "suitable", "skipped", "considered"}:
             raise ValueError("Quyết định không hợp lệ")
         with self.connect() as db:
             db.execute("UPDATE posts SET user_decision=? WHERE content_hash=?", (decision, digest))
@@ -228,7 +257,10 @@ class Store:
             first["status"] = status
             first["evaluation"] = self._evaluation_status(rows)
             first["location"] = job_location(first["content"])
-            first["user_decision"] = "skipped" if status == "skipped" else None
+            decisions = {row["user_decision"] for row in rows if row["user_decision"]}
+            first["user_decision"] = (
+                "skipped" if status == "skipped" else "considered" if "considered" in decisions else None
+            )
             first["group_name"] = ", ".join(dict.fromkeys(row["group_name"] for row in rows))
             first["group_url"] = rows[0]["group_url"]
             first["source_group_urls"] = [row["group_url"] for row in rows]
@@ -265,9 +297,19 @@ class Store:
             row["application_ids"] = [app["id"] for app in linked]
             row["application_status"] = " / ".join(dict.fromkeys(app["status"] for app in linked))
             row["processing"] = (
-                "skipped" if row["user_decision"] == "skipped" else "tracked" if linked else "unprocessed"
+                "skipped" if row["user_decision"] == "skipped"
+                else "tracked" if linked
+                else "considered" if row["user_decision"] == "considered"
+                else "unprocessed"
             )
         return result[offset : offset + limit] if limit is not None else result
+
+    def saved_considerations(self, search=""):
+        """Posts explicitly saved with Y, independent from application records."""
+        return [
+            row for row in self.grouped_posts(search, category="all")
+            if row["user_decision"] == "considered"
+        ]
 
     def grouped_count(self, search="", category="suitable"):
         return len(self.grouped_posts(search, category))
