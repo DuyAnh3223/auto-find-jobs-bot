@@ -111,6 +111,18 @@ def test_modern_feed_uses_real_cards_and_hovers_timestamp(context, monkeypatch):
 
 
 @pytest.mark.browser
+def test_unfiltered_reader_delivers_edited_post_without_job_keywords(context, monkeypatch):
+    html = '''<div role="feed"><div><a href="/groups/123/posts/900/">1 hour</a>
+    <div data-ad-rendering-role="story_message">Selling office chairs</div></div></div>'''
+    context.route("**/*", lambda route: route.fulfill(body=html, content_type="text/html"))
+    monkeypatch.setattr("monitor.facebook.pause", lambda stop, seconds: check_stop(stop))
+    found = []
+    read_group(context, Group("Jobs", "https://www.facebook.com/groups/123"), None,
+               1, Event(), lambda *args: None, found.append)
+    assert [post.content for post in found] == ["Selling office chairs"]
+
+
+@pytest.mark.browser
 def test_feed_removal_during_hover_does_not_shift_card_identity(context, monkeypatch):
     html = """<div role="feed">
       <div><a href="?ref=fixture" onmouseenter="document.getElementById('obsolete')?.remove();this.href='/groups/123/posts/101/'">1 hour</a>
@@ -136,7 +148,7 @@ def test_feed_removal_during_hover_does_not_shift_card_identity(context, monkeyp
         ("101", "Java first post"),
         ("103", "Java last post"),
     ]
-    assert "1 lần thẻ đổi/timeout" in logs[-1]
+    assert "1 lần thẻ đổi/timeout" in logs[-1]["reason"]
 
 
 @pytest.mark.browser

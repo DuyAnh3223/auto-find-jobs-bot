@@ -71,14 +71,14 @@ def test_partial_failure_exports_new_and_refreshed_posts(tmp_path, monkeypatch):
     worker = MonitorWorker(Store(tmp_path / "monitor.db"), tmp_path)
     monkeypatch.setattr("monitor.worker.open_browser", lambda *args: nullcontext(object()))
     settings = Settings(groups=[Group("group", "https://www.facebook.com/groups/1")])
-    contents = iter(["Java first content HCM", "Java updated content HCM"])
+    contents = iter(["Java Intern first content HCM", "Java Intern updated content HCM"])
 
     def partial(context, group, keywords, limit, stop, emit, on_post):
         on_post(Post(group.url + "/posts/10", group.name, group.url, next(contents), ["java"]))
         raise RuntimeError("feed interrupted after save")
 
     monkeypatch.setattr("monitor.worker.read_group", partial)
-    for expected in ["Java first content HCM", "Java updated content HCM"]:
+    for expected in ["Java Intern first content HCM", "Java Intern updated content HCM"]:
         worker.scan_once(settings)
         book = load_workbook(tmp_path / "exports" / "results.xlsx")
         assert book.active["I2"].value == expected
@@ -126,3 +126,26 @@ def test_interval_is_start_to_start_without_catchup_burst(tmp_path, monkeypatch)
     worker._run(Settings(interval_minutes=20), "scan")
     worker._run(Settings(interval_minutes=20), "scan")
     assert durations == [1185, 1200]
+
+
+def test_edited_post_without_keywords_is_rejected_and_removed_from_export(tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+
+    store = Store(tmp_path / "monitor.db")
+    worker = MonitorWorker(store, tmp_path)
+    settings = Settings(groups=[Group("Jobs", "https://www.facebook.com/groups/1")])
+    monkeypatch.setattr("monitor.worker.open_browser", lambda *args: nullcontext(object()))
+    texts = iter(["Java Intern HCM", "Selling office chairs HCM"])
+
+    def scrape(context, group, keywords, limit, stop, emit, on_post):
+        assert keywords is None
+        on_post(Post(group.url + "/posts/1", group.name, group.url, next(texts), []))
+
+    monkeypatch.setattr("monitor.worker.read_group", scrape)
+    worker.scan_once(settings)
+    assert store.posts()[0]["bot_status"] == "suitable"
+    worker.scan_once(settings)
+    assert store.posts()[0]["bot_status"] == "unsuitable"
+    book = load_workbook(tmp_path / "exports/results.xlsx")
+    assert book.active.max_row == 1
+    book.close()

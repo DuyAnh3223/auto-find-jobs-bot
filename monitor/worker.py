@@ -4,9 +4,10 @@ from pathlib import Path
 from queue import SimpleQueue
 from threading import Event, Thread
 
-from monitor.core import classify_content, job_location
+from monitor.core import now_iso
 from monitor.exporter import export_posts
 from monitor.facebook import ScanStopped, SessionRequired, check_stop, login, open_browser, read_group
+from monitor.job_matching import classify_job, criteria_fingerprint
 
 
 class MonitorWorker:
@@ -81,14 +82,30 @@ class MonitorWorker:
 
         def save(post):
             nonlocal count, saved
-            if post.bot_status == "unsuitable" or job_location(post.content) == "outside":
+            result = classify_job(post.content, settings)
+            post = post.__class__(
+                **{
+                    **post.__dict__,
+                    "bot_status": result.status,
+                    "keywords": post.keywords,
+                    "classification_json": result.to_json(),
+                    "classifier_version": result.classifier_version,
+                    "criteria_fingerprint": criteria_fingerprint(settings),
+                    "classified_at": now_iso(),
+                }
+            )
+            if result.status == "unsuitable":
+                if self.store.has_post(post.url):
+                    self.store.save_post(post)
+                    saved += 1
+                    self.emit("results", "")
                 return
             if self.store.save_post(post):
                 count += 1
             saved += 1
             self.emit("results", "")
 
-        candidate_keywords = settings.keywords or settings.location_keywords or settings.experience_keywords
+        candidate_keywords = None  # Every readable post reaches the classifier, including edits.
         for group in settings.groups:
             if group.enabled:
                 self.store.record_scan_check(
@@ -122,14 +139,7 @@ class MonitorWorker:
                         scan_limit,
                         self.stop_event,
                         report,
-                        lambda post: save(
-                            post.__class__(
-                                **{
-                                    **post.__dict__,
-                                    "bot_status": classify_content(post.content, settings, post.keywords),
-                                }
-                            )
-                        ),
+                        save,
                     )
                     successes += 1
                 except (ScanStopped, SessionRequired) as exc:
@@ -163,7 +173,8 @@ class MonitorWorker:
                 rows = [
                     row
                     for row in self.store.grouped_posts(category="all")
-                    if row.get("status") in {"suitable", "review"} and row["location"] == "hcm"
+                    if row["evaluation"] == "suitable" and not row["classification_stale"]
+                    and row["processing"] != "skipped"
                 ]
                 export_posts(rows, target)
                 self.emit("log", f"Đã cập nhật Excel: {target}")

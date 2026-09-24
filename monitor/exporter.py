@@ -20,6 +20,10 @@ HEADERS = [
     "Hash nội dung",
     "Các group",
     "Các link nguồn",
+    "Nhóm nghề",
+    "Level",
+    "Địa điểm phân loại",
+    "Lý do phân loại",
 ]
 CSV_HEADERS = HEADERS[:9]
 
@@ -41,6 +45,20 @@ def text_cell(value):
 def values(row):
     source_groups = row.get("source_groups") or [row["group_name"]]
     source_urls = row.get("source_urls") or [row["url"]]
+    classification = {}
+    if row.get("classification_json"):
+        try:
+            classification = json.loads(row["classification_json"])
+        except (TypeError, json.JSONDecodeError):
+            classification = {}
+    jobs = classification.get("jobs", [])
+    families = {"swe": "SWE", "it_helpdesk_support": "IT Helpdesk/Support"}
+    role_families = ", ".join(dict.fromkeys(
+        families.get(job.get("family"), "") for job in jobs if job.get("family")
+    ))
+    levels = ", ".join(dict.fromkeys(job.get("level", "") for job in jobs if job.get("level")))
+    locations = ", ".join(dict.fromkeys(job.get("location", "") for job in jobs if job.get("location")))
+    reasons = ", ".join(dict.fromkeys(classification.get("reason_codes", [])))
     return [
         row["group_name"],
         row["group_url"],
@@ -51,10 +69,14 @@ def values(row):
         local_time(row["detected_at"]),
         local_time(row["last_seen_at"]),
         row["content"],
-        row.get("status", "suitable"),
+        "Cần đánh giá lại" if row.get("classification_stale") else row.get("evaluation", row.get("status", "suitable")),
         row.get("content_hash", ""),
         ", ".join(dict.fromkeys(source_groups)),
         "\n".join(dict.fromkeys(source_urls)),
+        role_families,
+        levels,
+        locations,
+        reasons,
     ]
 
 
@@ -91,7 +113,9 @@ def export_posts(rows, destination: Path):
             for cell in sheet[1]:
                 cell.font = Font(bold=True, color="FFFFFF")
                 cell.fill = PatternFill("solid", fgColor="175CD3")
-            for index, width in enumerate([28, 40, 30, 50, 28, 24, 28, 28, 90, 16, 64, 30, 60], 1):
+            for index, width in enumerate(
+                [28, 40, 30, 50, 28, 24, 28, 28, 90, 16, 64, 30, 60, 24, 18, 24, 36], 1
+            ):
                 sheet.column_dimensions[get_column_letter(index)].width = width
             for row in sheet.iter_rows(min_row=2):
                 for cell in row:

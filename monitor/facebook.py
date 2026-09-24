@@ -15,7 +15,8 @@ from playwright.sync_api import Error as BrowserError
 from playwright.sync_api import TimeoutError as BrowserTimeout
 from playwright.sync_api import sync_playwright
 
-from monitor.core import Group, Post, group_url, match_keywords, post_url
+from monitor.core import Group, Post, group_url, post_url
+from monitor.job_matching import candidate_keyword_hits
 
 
 class ScanStopped(Exception):
@@ -279,8 +280,8 @@ def read_group(context, group: Group, keywords, max_posts, stop, emit, on_post):
                 if identity in visited:
                     continue
                 visited.add(identity)
-                hits = match_keywords(text, keywords)
-                if hits:
+                hits = candidate_keyword_hits(text, keywords or [])
+                if keywords is None or hits:
                     on_post(
                         Post(
                             identity,
