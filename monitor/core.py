@@ -64,50 +64,11 @@ def job_location(text: str) -> str:
 def classify_content(
     text: str, settings: "Settings", matched_position_keywords: list[str] | None = None
 ) -> str:
-    """Classify a position candidate without pretending to understand every job ad.
+    """Compatibility wrapper around the deterministic job profile classifier."""
+    from monitor.job_matching import classify_job
 
-    Empty criteria mean unrestricted. Missing location/experience stays reviewable;
-    only an explicit common contradiction is hidden.
-    """
-    position_ok = (
-        not settings.keywords
-        or bool(matched_position_keywords)
-        or bool(match_keywords(text, settings.keywords))
-    )
-    if not position_ok:
-        return "unsuitable"
-    lower = normalize(text)
-    location = job_location(text)
-    if location == "outside":
-        return "unsuitable"
-    if settings.experience_keywords:
-        experience_ok = bool(match_keywords(text, settings.experience_keywords))
-        senior_only = any(
-            token in lower
-            for token in (
-                "senior",
-                "lead developer",
-                "technical lead",
-                "3 năm kinh nghiệm",
-                "3+ years",
-                "4+ years",
-                "5+ years",
-                "2-3 years",
-                "2 years",
-                "3 years",
-                "minimum 2 years",
-                "tối thiểu 2 năm",
-            )
-        )
-        junior_target = any(
-            token in normalize(" ".join(settings.experience_keywords))
-            for token in ("intern", "fresher", "junior", "entry", "mới ra trường", "không yêu cầu")
-        )
-        if senior_only and junior_target:
-            return "unsuitable"
-        if not experience_ok:
-            return "review"
-    return "review" if location == "unknown" else "suitable"
+    result = classify_job(text, settings)
+    return result.status
 
 
 def facebook_url(value: str):
@@ -166,8 +127,22 @@ class Group:
 @dataclass
 class Settings:
     groups: list[Group] = field(default_factory=list)
+    job_families: list[str] = field(default_factory=lambda: ["swe", "it_helpdesk_support"])
     keywords: list[str] = field(
-        default_factory=lambda: ["tuyển java", "java intern", "thực tập backend", "spring boot", "flutter"]
+        default_factory=lambda: [
+            "software engineer",
+            "software developer",
+            "lập trình viên",
+            "backend developer",
+            "frontend developer",
+            "full stack developer",
+            "java developer",
+            "it helpdesk",
+            "it support",
+            "desktop support",
+            "service desk",
+            "nhân viên IT",
+        ]
     )
     location_keywords: list[str] = field(default_factory=list)
     experience_keywords: list[str] = field(default_factory=list)
@@ -180,6 +155,8 @@ class Settings:
     auto_export: bool = True
 
     def validate(self, for_scan: bool = False):
+        if not self.job_families or set(self.job_families) - {"swe", "it_helpdesk_support"}:
+            raise ValueError("Hãy chọn SWE hoặc IT Helpdesk/Support.")
         if not 10 <= self.interval_minutes <= 1440:
             raise ValueError("Khoảng quét phải từ 10 đến 1440 phút.")
         if not 1 <= self.max_posts <= 100:
@@ -206,8 +183,6 @@ class Settings:
         )
         if for_scan and not any(g.enabled for g in self.groups):
             raise ValueError("Hãy thêm và bật ít nhất một group.")
-        if for_scan and not (self.keywords or self.location_keywords or self.experience_keywords):
-            raise ValueError("Hãy nhập ít nhất một điều kiện tìm kiếm.")
 
     def to_dict(self):
         return asdict(self)
@@ -236,3 +211,7 @@ class Post:
     posted_time_raw: str = ""
     bot_status: str = "suitable"
     content_hash: str | None = None
+    classification_json: str | None = None
+    classifier_version: str | None = None
+    criteria_fingerprint: str | None = None
+    classified_at: str | None = None
