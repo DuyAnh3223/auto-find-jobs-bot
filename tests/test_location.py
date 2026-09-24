@@ -23,23 +23,31 @@ def test_old_posts_are_filtered_without_rescanning(tmp_path):
     app = MonitorApp(tmp_path)
     app.withdraw()
     try:
-        for index, text in enumerate(["Java HCM", "Java HN", "Java internship", "Java HCM senior 3 years"]):
+        for index, text in enumerate(["Java Intern HCM", "Java HN", "Java internship", "Java HCM senior 3 years"]):
             app.store.save_post(Post(f"https://www.facebook.com/groups/1/posts/{index}",
                                     "Jobs", "https://www.facebook.com/groups/1", text, ["java"],
                                     bot_status="unsuitable" if "senior" in text else "suitable"))
-        assert [r["content"] for r in app.filtered_rows()] == ["Java HCM"]
+        assert app.filtered_rows() == []  # Legacy labels are not current evidence.
+        app.evaluation_filter.set("Cần đánh giá lại")
+        assert len(app.filtered_rows()) == 2
+        app.store.reclassify_posts(apply=True)
+        app.evaluation_filter.set("Phù hợp")
+        assert [r["content"] for r in app.filtered_rows()] == ["Java Intern HCM"]
+        app.evaluation_filter.set("Cần xem lại")
         app.location_filter.set("Chưa rõ địa điểm")
         assert [r["content"] for r in app.filtered_rows()] == ["Java internship"]
         app.location_filter.set("Tất cả")
+        app.evaluation_filter.set("Tất cả")
         assert len(app.filtered_rows()) == 2
         app.store.save_post(Post("https://www.facebook.com/groups/1/posts/9", "Jobs",
                                 "https://www.facebook.com/groups/1", "Java HCM review", ["java"],
                                 bot_status="review"))
+        app.store.reclassify_posts(apply=True)
         app.location_filter.set("HCM")
         app.evaluation_filter.set("Cần xem lại")
         assert [r["content"] for r in app.filtered_rows()] == ["Java HCM review"]
         app.evaluation_filter.set("Phù hợp")
-        assert [r["content"] for r in app.filtered_rows()] == ["Java HCM"]
+        assert [r["content"] for r in app.filtered_rows()] == ["Java Intern HCM"]
         assert app.store.count() == 5
     finally:
         app.destroy()

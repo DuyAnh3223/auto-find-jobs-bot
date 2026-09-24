@@ -12,15 +12,14 @@ def test_gui_config_history_open_link_and_busy_controls(tmp_path, monkeypatch):
         app.max_posts.set("20")
         app.deep_time.set("07:00")
         app.deep_posts.set("60")
-        app.keywords.delete("1.0", "end")
-        app.keywords.insert("1.0", "java intern\nspring boot")
+        app.family_vars["it_helpdesk_support"].set(False)
         app.save_settings()
         saved = app.store.load_settings()
         assert saved.interval_minutes == 30
         assert saved.max_posts == 20
         assert saved.daily_deep_time == "07:00"
         assert saved.daily_deep_posts == 60
-        assert saved.keywords == ["java intern", "spring boot"]
+        assert saved.job_families == ["swe"]
         app.set_busy(True)
         assert app.start_button.cget("state") == "disabled"
         assert app.stop_button.cget("state") == "normal"
@@ -37,6 +36,7 @@ def test_gui_config_history_open_link_and_busy_controls(tmp_path, monkeypatch):
             ["java intern"],
         )
         app.store.save_post(post)
+        app.store.reclassify_posts(apply=True)
         app.refresh_results()
         key = app.table.get_children()[0]
         app.table.selection_set(key)

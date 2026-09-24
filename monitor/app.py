@@ -6,7 +6,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, SimpleQueue
-from threading import Thread
+from threading import Event, Thread
 from tkinter import PanedWindow, filedialog, messagebox, ttk
 
 import customtkinter as ctk
@@ -34,6 +34,8 @@ class MonitorApp(ctk.CTk):
         self.worker = MonitorWorker(self.store, data_dir)
         self.export_thread = None
         self.export_events = SimpleQueue()
+        self.reclassify_thread = None
+        self.reclassify_stop = Event()
         self.closing = False
         self.next_scan = None
         self.offset = 0
@@ -86,13 +88,21 @@ class MonitorApp(ctk.CTk):
         add = ctk.CTkButton(panel, text="+ Thêm group", command=self.add_group)
         add.grid(row=4, column=0, padx=16, pady=(0, 15), sticky="ew")
         self.edit_controls.append(add)
-        ctk.CTkLabel(panel, text="VỊ TRÍ / CÔNG NGHỆ · OR", font=("Segoe UI", 14, "bold")).grid(
+        ctk.CTkLabel(panel, text="MỤC TIÊU · SWE + IT HELPDESK/SUPPORT", font=("Segoe UI", 14, "bold")).grid(
             row=5, column=0, sticky="w", padx=16
         )
         self.keywords = ctk.CTkTextbox(panel, height=135, font=("Segoe UI", 14))
-        self.keywords.grid(row=6, column=0, padx=16, pady=8, sticky="ew")
         self.keywords.insert("1.0", "\n".join(self.settings.keywords))
-        self.edit_controls.append(self.keywords)
+        self.keywords.configure(state="disabled")
+        families = ctk.CTkFrame(panel, fg_color="transparent")
+        families.grid(row=6, column=0, padx=16, pady=8, sticky="ew")
+        self.family_vars = {}
+        for family, label in [("swe", "Software Engineering"), ("it_helpdesk_support", "IT Helpdesk / Support")]:
+            var = ctk.BooleanVar(value=family in self.settings.job_families)
+            self.family_vars[family] = var
+            checkbox = ctk.CTkCheckBox(families, text=label, variable=var)
+            checkbox.pack(anchor="w", pady=4)
+            self.edit_controls.append(checkbox)
         self.location_box = self._criteria_box(panel, "ĐỊA ĐIỂM · OR", self.settings.location_keywords, 7)
         self.location_box.delete("1.0", "end")
         self.location_box.insert("1.0", "HCM · TP.HCM · Hồ Chí Minh · Sài Gòn\nNgoài HCM tự bỏ qua; chưa rõ địa điểm xem riêng.")
@@ -101,6 +111,10 @@ class MonitorApp(ctk.CTk):
         self.experience_box = self._criteria_box(
             panel, "KINH NGHIỆM · OR", self.settings.experience_keywords, 9
         )
+        self.experience_box.delete("1.0", "end")
+        self.experience_box.insert("1.0", "Intern / Fresher\nThiếu bằng chứng: cần xem lại.\nYêu cầu kinh nghiệm bắt buộc: không phù hợp.")
+        self.experience_box.configure(state="disabled")
+        self.edit_controls.remove(self.experience_box)
         options = ctk.CTkFrame(panel, fg_color="transparent")
         options.grid(row=11, column=0, padx=16, pady=8, sticky="ew")
         self.interval = ctk.StringVar(value=str(self.settings.interval_minutes))
@@ -132,6 +146,15 @@ class MonitorApp(ctk.CTk):
         )
         save.grid(row=13, column=0, padx=16, pady=8, sticky="ew")
         self.edit_controls.append(save)
+        reclassify = ctk.CTkButton(
+            panel,
+            text="Đánh giá lại bài đã lưu",
+            command=self.reclassify_saved_posts,
+            fg_color="#7c3aed",
+            hover_color="#6d28d9",
+        )
+        reclassify.grid(row=14, column=0, padx=16, pady=(0, 8), sticky="ew")
+        self.edit_controls.append(reclassify)
         controls = ctk.CTkFrame(sidebar, fg_color="transparent")
         controls.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         controls.grid_columnconfigure(0, weight=1)
@@ -251,8 +274,9 @@ class MonitorApp(ctk.CTk):
         settings = Settings(
             groups=[Group(g.name, g.url, g.enabled) for g in self.settings.groups],
             keywords=self.keywords.get("1.0", "end").splitlines(),
+            job_families=[family for family, var in self.family_vars.items() if var.get()],
             location_keywords=self.settings.location_keywords,
-            experience_keywords=self.experience_box.get("1.0", "end").splitlines(),
+            experience_keywords=self.settings.experience_keywords,
             interval_minutes=interval,
             max_posts=limit,
             daily_deep_time=self.deep_time.get().strip(),
@@ -269,10 +293,56 @@ class MonitorApp(ctk.CTk):
             self.store.save_settings(settings)
             self.settings = settings
             self.append_log("Đã lưu cấu hình.")
+            self.refresh_results()
             return settings
         except (ValueError, OSError) as exc:
             messagebox.showerror("Không lưu được cấu hình", str(exc), parent=self)
             return None
+
+    def reclassify_saved_posts(self):
+        if self.worker.running or (self.reclassify_thread and self.reclassify_thread.is_alive()):
+            messagebox.showerror("Đang quét", "Hãy STOP lượt quét trước khi đánh giá lại bài đã lưu.", parent=self)
+            return
+        if self.save_settings() is None:
+            return
+        self._start_reclassification(False)
+
+    def _start_reclassification(self, apply):
+        self.reclassify_stop.clear()
+        self.set_busy(True)
+        self.status.configure(text="Đang đánh giá lại bài đã lưu…")
+
+        def run():
+            try:
+                result = self.store.reclassify_posts(
+                    apply=apply, stop=self.reclassify_stop,
+                    progress=lambda done, total: self.export_events.put(("status", f"Đánh giá {done}/{total} bài…")),
+                )
+                self.export_events.put(("reclassified" if apply else "reclassify_preview", result))
+            except Exception as exc:
+                self.export_events.put(("reclassify_error", str(exc)))
+
+        self.reclassify_thread = Thread(target=run, name="reclassify")
+        self.reclassify_thread.start()
+
+    def _show_reclassify_preview(self, preview):
+        self.set_busy(False)
+        self.status.configure(text="Đã xem trước kết quả đánh giá")
+        if not preview["changed"]:
+            self.append_log(f"Bài đã lưu đã dùng classifier hiện tại ({preview['total']} bài).")
+            return
+        transitions = ", ".join(
+            f"{transition}: {count}" for transition, count in preview["by_transition"].items()
+        )
+        confirmed = messagebox.askyesno(
+            "Đánh giá lại bài đã lưu",
+            f"Sẽ cập nhật {preview['changed']}/{preview['total']} bài.\n{transitions}\n\n"
+            "Bài đã lưu xem xét và hồ sơ ứng tuyển vẫn được giữ. Tiếp tục?",
+            parent=self,
+        )
+        if not confirmed:
+            return
+        self._start_reclassification(True)
 
     def set_busy(self, busy):
         for control in self.edit_controls + self.group_controls:
@@ -297,6 +367,7 @@ class MonitorApp(ctk.CTk):
             self.status.configure(text="Bắt đầu quét…")
 
     def stop_scan(self):
+        self.reclassify_stop.set()
         self.worker.stop()
         self.next_scan = None
         self.status.configure(text="Đang dừng và đóng trình duyệt…")
@@ -333,7 +404,7 @@ class MonitorApp(ctk.CTk):
         ctk.CTkLabel(tabs, text="Đánh giá").grid(row=1, column=2, padx=(12, 5))
         self.evaluation_filter = ctk.CTkOptionMenu(
             tabs,
-            values=["Tất cả", "Phù hợp", "Cần xem lại"],
+            values=["Phù hợp", "Cần xem lại", "Cần đánh giá lại", "Tất cả"],
             width=120,
             command=lambda _: self.search_results(),
         )
@@ -479,6 +550,8 @@ class MonitorApp(ctk.CTk):
 
     @staticmethod
     def evaluation_label(row):
+        if row.get("classification_stale"):
+            return "Cần đánh giá lại"
         return {"suitable": "Phù hợp", "review": "Cần xem lại",
                 "unsuitable": "Không phù hợp"}.get(row["evaluation"], "Cần xem lại")
 
@@ -494,10 +567,12 @@ class MonitorApp(ctk.CTk):
             "Đã bỏ qua": "skipped",
         }.get(self.processing_filter.get())
         rows = self.store.grouped_posts(self.search.get().strip(), category="all")
+        stale_filter = self.evaluation_filter.get() == "Cần đánh giá lại"
         return [
             row
             for row in rows
-            if row["evaluation"] in {"suitable", "review"}
+            if (row["classification_stale"] if stale_filter else not row["classification_stale"])
+            and (stale_filter or row["evaluation"] in {"suitable", "review"})
             and row["location"] != "outside"
             and (location is None or row["location"] == location)
             and (evaluation is None or row["evaluation"] == evaluation)
@@ -552,6 +627,22 @@ class MonitorApp(ctk.CTk):
     def show_details(self, _event=None):
         row = self.selected_row()
         if row:
+            classification = {}
+            if row.get("classification_json"):
+                try:
+                    classification = json.loads(row["classification_json"])
+                except (TypeError, json.JSONDecodeError):
+                    classification = {}
+            job_lines = []
+            for job in classification.get("jobs", []):
+                family = {"swe": "SWE", "it_helpdesk_support": "IT Helpdesk/Support"}.get(
+                    job.get("family"), "Không xác định"
+                )
+                job_lines.append(
+                    f"- {job.get('title', '')} · {family} · {job.get('level', 'unknown')} · "
+                    f"{job.get('location', 'unknown')} · {job.get('status', 'review')}"
+                )
+            matching_details = "\n".join(job_lines) if job_lines else "Chưa có bằng chứng phân loại mới"
             self.set_text(
                 self.details,
                 f"{row['group_name']} · {', '.join(json.loads(row['keywords']))}\n"
@@ -560,7 +651,8 @@ class MonitorApp(ctk.CTk):
                 f"{len(row.get('source_urls', [row['url']]))} bài trùng nội dung\n"
                 f"{row['url']}\nNguồn: {' | '.join(row.get('source_urls', [row['url']]))}\n"
                 f"Ngày đăng: {local_time(row['posted_at']) or row['posted_time_raw'] or 'Không xác định'}"
-                f"\nPhát hiện: {local_time(row['detected_at'])}\n\n{row['content']}",
+                f"\nPhát hiện: {local_time(row['detected_at'])}\n\n"
+                f"Phân loại vị trí:\n{matching_details}\n\n{row['content']}",
             )
 
     def open_post(self, _event=None):
@@ -762,10 +854,10 @@ class MonitorApp(ctk.CTk):
             return
         for button in self.export_buttons:
             button.configure(state="disabled")
+        rows = self.filtered_rows()  # Read Tk controls only on the UI thread.
 
         def run():
             try:
-                rows = self.filtered_rows()
                 export_posts(rows, Path(filename))
                 self.export_events.put(("log", f"Đã xuất {len(rows)} bài: {filename}"))
             except Exception as exc:
@@ -792,6 +884,14 @@ class MonitorApp(ctk.CTk):
                 except Empty:
                     break
                 if kind == "results":
+                    refresh = True
+                elif kind == "reclassify_preview":
+                    if not self.closing:
+                        self._show_reclassify_preview(value)
+                elif kind in {"reclassified", "reclassify_error"}:
+                    self.set_busy(False)
+                    self.status.configure(text="Đánh giá lại đã kết thúc")
+                    self.append_log(f"Đã cập nhật {value['changed']} bài." if kind == "reclassified" else value)
                     refresh = True
                 elif kind == "checks":
                     self.checks_button.configure(text=f"Kiểm tra group ({len(self.store.scan_checks())})")
@@ -828,6 +928,7 @@ class MonitorApp(ctk.CTk):
             self.closing
             and not self.worker.running
             and not (self.export_thread and self.export_thread.is_alive())
+            and not (self.reclassify_thread and self.reclassify_thread.is_alive())
         ):
             self.destroy()
             return

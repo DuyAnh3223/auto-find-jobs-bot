@@ -15,7 +15,9 @@ Máy cần Windows 10/11 64-bit và Microsoft Edge hoặc Google Chrome đã cà
 Đây là bản đóng gói theo thư mục, chưa ký số và chưa có installer.
 
 1. Bấm **Thêm group**, nhập link `https://www.facebook.com/groups/ten-hoac-id`, đặt tên hiển thị.
-2. Chọn các group muốn theo dõi bằng checkbox; nhập mỗi từ khóa trên một dòng.
+2. Chọn các group và nhóm nghề SWE, IT Helpdesk/Support bằng checkbox.
+   Địa điểm HCM và mức intern/fresher là tiêu chí cố định của profile này.
+   Cấu hình từ khóa cũ vẫn được lưu để truy vết nhưng không còn là ô chỉnh bộ lọc.
 3. Chọn Edge hoặc Chrome. Bấm **Mở Facebook để đăng nhập**.
 4. Tự đăng nhập/xác minh trong cửa sổ trình duyệt của bot, rồi bấm **Đã đăng nhập** trên ứng dụng.
    Bot xác nhận phiên rồi đóng trình duyệt để lưu profile. Không nhập mật khẩu vào ứng dụng.
@@ -58,15 +60,22 @@ app.lock                    # Khóa ngăn mở hai app trên cùng dữ liệu
 - Nếu chỉ thấy “2 giờ”, giữ nguyên chuỗi đó; **không gán giờ phát hiện làm giờ đăng**.
 - URL bài là khóa chống trùng. Thấy lại bài khớp thì cập nhật nội dung/từ khóa,
   giữ ngày phát hiện đầu tiên. Bài giống nội dung nhưng khác URL vẫn là hai bài.
-- Lọc cụm từ dạng chứa, không phân biệt hoa thường; chuẩn hóa Unicode và khoảng trắng/xuống dòng.
-  Vẫn phân biệt dấu tiếng Việt. `java intern` khớp `JAVA\nINTERN`; `java` cũng có thể khớp `javascript`.
-  Không dùng AI, không yêu cầu từ khóa xuất hiện nguyên một từ, chưa có từ khóa loại trừ.
-- Chỉ lưu bài đang khớp tại lúc đọc. Sửa từ khóa áp dụng cho các lượt sau; không tìm lại toàn bộ
-  lịch sử Facebook. Bài cũ đã lưu không tự bị xóa khi sửa nội dung hoặc không còn khớp.
+- Bộ phân loại dùng cụm từ có biên từ, chuẩn hóa Unicode và bỏ dấu cho profile việc làm.
+  `intern` không khớp `internal`; `java` không khớp `javascript`. Công nghệ đứng riêng chỉ là
+  bằng chứng phụ, cần chức danh/nhiệm vụ SWE hoặc IT support.
+- Một bài chỉ phù hợp khi cùng vị trí có ngành mục tiêu, level intern/fresher và địa điểm HCM.
+  Bài thiếu bằng chứng được đưa vào **Cần xem lại**; bài sai ngành/level/địa điểm bị loại khỏi danh sách chính.
+- Nút **Đánh giá lại bài đã lưu** cho phép xem trước rồi áp dụng classifier mới. Hash, ngày phát hiện,
+  quyết định lưu xem xét và hồ sơ ứng tuyển được giữ nguyên.
+  Đánh giá chạy nền có tiến độ; **STOP** hủy trước khi hoàn tất transaction và giữ đánh giá cũ.
+  Khi đổi nhóm nghề hoặc phiên bản bộ lọc, nhãn cũ nằm ở **Cần đánh giá lại**.
+  Danh sách mặc định chỉ hiện **Phù hợp**; chọn **Cần xem lại** để đọc bài thiếu bằng chứng.
+- Phân loại lưu kèm family, level, location, lý do và phiên bản classifier; Excel có các cột này.
 - Lịch sử phân trang 100 bài. Ô tìm kiếm hỗ trợ nội dung, tên group và từ khóa; SQLite LIKE mặc định
   chỉ bỏ qua hoa thường đầy đủ cho ASCII, nên tìm lịch sử tiếng Việt có thể phân biệt hoa thường.
 - Nút **Excel/CSV** xuất toàn bộ kết quả khớp ô tìm kiếm, không chỉ trang đang xem.
-  File tự động `results.xlsx` luôn chứa toàn bộ lịch sử.
+  File tự động `results.xlsx` chỉ chứa bài phù hợp theo tiêu chí hiện tại, chưa bị bỏ qua.
+  Xuất thủ công dùng các bộ lọc đang chọn; chọn Cần xem lại nếu muốn xuất riêng nhóm này.
 - Nếu đang mở `results.xlsx` bằng Excel, Windows có thể khóa file. Đóng file để lượt sau cập nhật được.
   Bot ghi file tạm rồi thay thế, giữ bản cũ nếu thay thế thất bại.
 - Nếu toàn bộ group đều lỗi đọc và chưa lưu/cập nhật bài nào, giữ nguyên file Excel.
