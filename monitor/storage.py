@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from monitor.core import Post, Settings, content_hash, job_location, now_iso
+from monitor.job_matching import classify_job, criteria_fingerprint
 
 
 class Store:
@@ -54,6 +55,10 @@ class Store:
                 "content_hash": "TEXT NOT NULL DEFAULT ''",
                 "bot_status": "TEXT NOT NULL DEFAULT 'suitable'",
                 "user_decision": "TEXT",
+                "classification_json": "TEXT",
+                "classifier_version": "TEXT",
+                "criteria_fingerprint": "TEXT",
+                "classified_at": "TEXT",
             }.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE posts ADD COLUMN {name} {definition}")
@@ -162,8 +167,9 @@ class Store:
             cursor = db.execute(
                 """
                 INSERT INTO posts (url,group_name,group_url,content,keywords,detected_at,
-                    last_seen_at,posted_at,posted_time_raw,content_hash,bot_status,user_decision)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    last_seen_at,posted_at,posted_time_raw,content_hash,bot_status,user_decision,
+                    classification_json,classifier_version,criteria_fingerprint,classified_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(url) DO NOTHING
             """,
                 (
@@ -179,6 +185,10 @@ class Store:
                     digest,
                     post.bot_status,
                     None,
+                    post.classification_json,
+                    post.classifier_version,
+                    post.criteria_fingerprint,
+                    post.classified_at,
                 ),
             )
             inserted = cursor.rowcount == 1
@@ -188,7 +198,8 @@ class Store:
                 db.execute(
                     """UPDATE posts SET content=?, keywords=?, last_seen_at=?,
                     posted_at=COALESCE(?,posted_at), posted_time_raw=?, group_name=?,
-                    content_hash=?, bot_status=?, user_decision=? WHERE url=?""",
+                    content_hash=?, bot_status=?, user_decision=?, classification_json=?,
+                    classifier_version=?, criteria_fingerprint=?, classified_at=? WHERE url=?""",
                     (
                         post.content,
                         json.dumps(post.keywords, ensure_ascii=False),
@@ -199,10 +210,89 @@ class Store:
                         digest,
                         post.bot_status,
                         decision,
+                        post.classification_json,
+                        post.classifier_version,
+                        post.criteria_fingerprint,
+                        post.classified_at,
                         post.url,
                     ),
                 )
         return inserted
+
+    def has_post(self, url: str) -> bool:
+        with self.connect() as db:
+            return db.execute("SELECT 1 FROM posts WHERE url=?", (url,)).fetchone() is not None
+
+    def reclassify_posts(self, apply: bool = False, stop=None, progress=None) -> dict:
+        """Preview or apply the current classifier without changing user history."""
+        settings = self.load_settings()
+        with self.connect() as db:
+            rows = [dict(row) for row in db.execute(
+                "SELECT id,url,content,bot_status,classification_json,criteria_fingerprint FROM posts"
+            ).fetchall()]
+            changes = []
+            for index, row in enumerate(rows):
+                if stop is not None and stop.is_set():
+                    raise InterruptedError("Đã hủy đánh giá lại; chưa thay đổi dữ liệu.")
+                result = classify_job(row["content"], settings)
+                if progress and (index % 100 == 0 or index == len(rows)-1):
+                    progress(index+1, len(rows))
+                changed = (
+                    row["bot_status"] != result.status
+                    or row["criteria_fingerprint"] != criteria_fingerprint(settings)
+                )
+                if changed:
+                    changes.append({
+                        "id": row["id"],
+                        "url": row["url"],
+                        "old_status": row["bot_status"],
+                        "new_status": result.status,
+                        "result": result,
+                    })
+            if apply:
+                if stop is not None and stop.is_set():
+                    raise InterruptedError("Đã hủy đánh giá lại.")
+                classified_at = now_iso()
+                for change in changes:
+                    if stop is not None and stop.is_set():
+                        raise InterruptedError("Đã hủy đánh giá lại.")
+                    result = change["result"]
+                    db.execute(
+                        """UPDATE posts SET bot_status=?, classification_json=?,
+                        classifier_version=?, criteria_fingerprint=?, classified_at=? WHERE id=?""",
+                        (
+                            result.status,
+                            result.to_json(),
+                            result.classifier_version,
+                            criteria_fingerprint(settings),
+                            classified_at,
+                            change["id"],
+                        ),
+                    )
+        return {
+            "total": len(rows),
+            "changed": len(changes),
+            "applied": bool(apply),
+            "by_transition": {
+                transition: sum(
+                    1 for change in changes
+                    if f"{change['old_status']}->{change['new_status']}" == transition
+                )
+                for transition in sorted({
+                    f"{change['old_status']}->{change['new_status']}" for change in changes
+                })
+            },
+            "changes": [
+                {
+                    "id": change["id"],
+                    "url": change["url"],
+                    "old_status": change["old_status"],
+                    "new_status": change["new_status"],
+                    "result": change["result"].to_dict(),
+                }
+                for change in changes
+            ],
+        }
 
     def set_user_decision(self, digest: str, decision: str | None):
         if decision not in {None, "suitable", "skipped", "considered"}:
@@ -235,6 +325,7 @@ class Store:
 
     def grouped_posts(self, search="", category="suitable", limit=None, offset=0):
         """Return one display/export row per exact content hash."""
+        fingerprint = criteria_fingerprint(self.load_settings())
         clause, params = self.search_clause(search)
         with self.connect() as db:
             raw = [
@@ -273,6 +364,21 @@ class Store:
                     if keyword not in keywords:
                         keywords.append(keyword)
             first["keywords"] = json.dumps(keywords, ensure_ascii=False)
+            classification_row = next(
+                (row for row in rows if row.get("classification_json")), rows[0]
+            )
+            first["classification_json"] = classification_row.get("classification_json")
+            first["classifier_version"] = classification_row.get("classifier_version")
+            first["criteria_fingerprint"] = classification_row.get("criteria_fingerprint")
+            first["classified_at"] = classification_row.get("classified_at")
+            first["classification_stale"] = any(
+                row.get("criteria_fingerprint") != fingerprint for row in rows
+            )
+            if first["classification_json"]:
+                jobs = json.loads(first["classification_json"]).get("jobs", [])
+                relevant = [job for job in jobs if job.get("family") and job.get("status") == first["evaluation"]]
+                places = {job["location"] for job in relevant}
+                first["location"] = "hcm" if "hcm" in places else "outside" if places == {"outside"} else "unknown"
             result.append(first)
         result.sort(key=lambda row: (row["detected_at"], row["id"]), reverse=True)
         from monitor.tracking import source_key

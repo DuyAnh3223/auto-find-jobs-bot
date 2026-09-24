@@ -52,8 +52,7 @@ def test_settings_validation_and_roundtrip():
         replace(value, interval_minutes=0).validate()
     with pytest.raises(ValueError):
         replace(value, groups=[]).validate(for_scan=True)
-    with pytest.raises(ValueError):
-        replace(value, keywords=[]).validate(for_scan=True)
+    replace(value, keywords=[], location_keywords=[], experience_keywords=[]).validate(for_scan=True)
 
 
 def sample_post(**kwargs):
@@ -139,6 +138,89 @@ def test_content_change_resets_manual_decision(tmp_path):
     assert row["content_hash"] != digest
     assert row["user_decision"] is None
     assert store.grouped_posts(category="review")[0]["content"] == "A different job"
+
+
+def test_reclassify_preview_and_apply_preserve_user_history(tmp_path):
+    store = Store(tmp_path / "monitor.db")
+    post = replace(
+        sample_post(),
+        content="Tuyển Java Developer tại HCM, yêu cầu 11 năm kinh nghiệm",
+        bot_status="suitable",
+    )
+    store.save_post(post)
+    digest = store.grouped_posts(category="suitable")[0]["content_hash"]
+    store.set_user_decision(digest, "considered")
+
+    preview = store.reclassify_posts()
+    assert preview["applied"] is False
+    assert preview["changed"] == 1
+    assert preview["by_transition"] == {"suitable->unsuitable": 1}
+    assert store.posts()[0]["bot_status"] == "suitable"
+
+    applied = store.reclassify_posts(apply=True)
+    assert applied["applied"] is True
+    row = store.posts()[0]
+    assert row["bot_status"] == "unsuitable"
+    assert row["user_decision"] == "considered"
+    assert row["content_hash"] == digest
+    assert row["classification_json"]
+    assert row["classifier_version"] == "job-profile-4"
+    assert row["classified_at"]
+
+
+def test_reclassify_is_idempotent(tmp_path):
+    store = Store(tmp_path / "monitor.db")
+    store.save_post(replace(sample_post(), content="Tuyển Java Intern tại HCM"))
+    first = store.reclassify_posts(apply=True)
+    second = store.reclassify_posts()
+    assert first["changed"] == 1
+    assert second["changed"] == 0
+
+
+def test_reclassification_cancellation_leaves_every_column_unchanged(tmp_path):
+    from threading import Event
+
+    store = Store(tmp_path / "monitor.db")
+    store.save_post(replace(sample_post(), content="Java Intern HCM"))
+    before = store.posts()
+    stop = Event()
+    with pytest.raises(InterruptedError):
+        store.reclassify_posts(apply=True, stop=stop, progress=lambda *args: stop.set())
+    assert store.posts() == before
+
+
+def test_changed_family_marks_previous_labels_stale_and_preserves_saved_posts(tmp_path):
+    store = Store(tmp_path / "monitor.db")
+    store.save_post(replace(sample_post(), content="Java Intern HCM"))
+    store.reclassify_posts(apply=True)
+    row = store.grouped_posts()[0]
+    store.set_user_decision(row["content_hash"], "considered")
+    assert row["classification_stale"] is False
+    before = store.posts()[0]
+    store.save_settings(Settings(job_families=["it_helpdesk_support"]))
+    assert store.grouped_posts(category="all")[0]["classification_stale"] is True
+    store.reclassify_posts(apply=True)
+    after = store.posts()[0]
+    assert after["bot_status"] == "unsuitable"
+    assert len(store.saved_considerations()) == 1
+    for key in ["content_hash", "detected_at", "last_seen_at", "user_decision", "content", "url"]:
+        assert after[key] == before[key]
+
+
+def test_reclassification_rolls_back_if_database_write_fails_midway(tmp_path):
+    import sqlite3
+
+    store = Store(tmp_path / "monitor.db")
+    for i in range(2):
+        store.save_post(replace(sample_post(), url=f"https://www.facebook.com/groups/123/posts/{i}",
+                               content="Java Intern HCM"))
+    before = store.posts()
+    with store.connect() as db:
+        db.execute("""CREATE TRIGGER reject_second BEFORE UPDATE OF bot_status ON posts
+                      WHEN OLD.id = 2 BEGIN SELECT RAISE(ABORT, 'fixture failure'); END""")
+    with pytest.raises(sqlite3.IntegrityError):
+        store.reclassify_posts(apply=True)
+    assert store.posts() == before
 
 
 def test_classification_requires_all_configured_criteria():
